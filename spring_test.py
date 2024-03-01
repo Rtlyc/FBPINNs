@@ -15,45 +15,56 @@ k = w0 * w0 * m  # spring constant
 u0 = 1.0  # initial displacement
 v0 = 0.0  # initial velocity
 
-def cosine_window(x, xmin, xmax, device):
-    """Compute the cosine window function for smooth transitions."""
-    # Scale and shift x to [-1, 1]
+
+def cosine_window(x, xmin, xmax, device='cpu'):
     x_scaled = 2 * (x - xmin) / (xmax - xmin) - 1
-    # Apply cosine window function
     window = (1 + torch.cos(x_scaled * torch.pi)) / 2
-    # Zero out values outside [xmin, xmax]
     window = torch.where((x >= xmin) & (x <= xmax), window, torch.tensor(0.0, device=device))
     return window
 
 
 class SpringSubNN(nn.Module):
-    def __init__(self, device):
+    def __init__(self, device, start, width):
         super(SpringSubNN, self).__init__()
         self.net = nn.Sequential(
-            nn.Linear(1, 32),
+            nn.Linear(1, 50),
             nn.Tanh(),
-            nn.Linear(32, 1)
+            nn.Linear(50, 1)
         ).to(device)
-
-    def forward(self, t):
-        return self.net(t)
-
-
-class SpringNN(nn.Module):
-    def __init__(self, device, subdomain_xs, subdomain_ws, unnorm):
-        super(SpringNN, self).__init__()
-        self.subnets = nn.ModuleList([SpringSubNN(device) for _ in range(len(subdomain_xs[0]))])
-        self.subnet_ranges = [(x-w/2, x+w/2) for x, w in zip(subdomain_xs[0], subdomain_ws[0])]
-        self.unnorm = unnorm
+        self.start = start
+        self.width = width
         self.device = device
 
     def forward(self, t):
-        outputs = torch.zeros_like(t)
-        for i, subnet in enumerate(self.subnets):
-            xmin, xmax = self.subnet_ranges[i]
-            weight = cosine_window(t, xmin, xmax, device)
-            outputs += weight * subnet(t)
-        return outputs
+        # Apply the window function within the forward method
+        end = self.start + self.width
+        weight = cosine_window(t, self.start, end)
+        return weight * self.net(t)
+    
+    # def cosine_window(self, x, xmin, xmax):
+    #     x_scaled = 2 * (x - xmin) / (xmax - xmin) - 1
+    #     window = (1 + torch.cos(x_scaled * torch.pi)) / 2
+    #     window = torch.where((x >= xmin) & (x <= xmax), window, torch.tensor(0.0, device=self.device))
+    #     return window
+
+
+class SpringNN(nn.Module):
+    def __init__(self, decomposition_init_kwargs, device):
+        super(SpringNN, self).__init__()
+        subdomain_xs = torch.linspace(*decomposition_init_kwargs['unnorm'], decomposition_init_kwargs['subdomain_xs'][0].size)
+        subdomain_ws = torch.tensor(decomposition_init_kwargs['subdomain_ws'][0], device=device)
+        self.subnets = nn.ModuleList()
+        for i in range(len(subdomain_xs)):
+            start = subdomain_xs[i] - subdomain_ws[i] / 2
+            self.subnets.append(SpringSubNN(device, start, subdomain_ws[i]))
+        self.device = device
+
+    def forward(self, t):
+        return sum(subnet(t) for subnet in self.subnets)
+    
+    def subnet_outputs(self, t):
+        return [subnet(t) for subnet in self.subnets]
+
 
 def loss_fn(model, t):
     u = model(t)
@@ -83,18 +94,67 @@ def exact_solution(x_batch, device):
 
 def viz(model, device):
     t_vals = torch.linspace(0, 1, steps=200, device=device).reshape(-1, 1)
+    
+    # Get both overall predictions and individual subnet outputs
     with torch.no_grad():
-        predictions = model(t_vals).cpu().numpy()
+        predictions = model(t_vals)
+        predictions = predictions.cpu().numpy()
+        subnet_outputs = model.subnet_outputs(t_vals)
 
     sol = exact_solution(t_vals.squeeze(), device).cpu().numpy()
+    
+    # Plot overall model predictions and exact solution
     plt.figure(figsize=(10, 6))
     plt.plot(t_vals.cpu().numpy(), predictions, label='NN Prediction')
     plt.plot(t_vals.cpu().numpy(), sol, label='Exact Solution')
+    plt.title('Overall Model Predictions vs. Exact Solution')
+    plt.grid(True)
+    plt.legend()
+    plt.savefig('spring_test_overall.png')
+    plt.close()
+    
+    plt.figure(figsize=(10, 6))
+    # Plot each subnet's windowed output
+    for i, subnet_output in enumerate(subnet_outputs):
+        plt.plot(t_vals.cpu().numpy(), subnet_output.cpu().numpy(), label=f'Subnet {i+1} Output', linestyle='--')
+    plt.title('Subnet Outputs')
+    
     plt.xlabel('Time')
     plt.ylabel('Displacement')
-    plt.legend()
+    # plt.legend()
     plt.grid(True)
-    plt.show()
+    plt.savefig('spring_test.png')
+    plt.close()
+
+
+def plot_subdomain_windows(decomposition_init_kwargs, device='cpu'):
+    # Prepare the input range (e.g., 0 to 1)
+    t_vals = torch.linspace(0, 1, 1000, device=device)
+    
+    plt.figure(figsize=(10, 6))
+    
+    subdomain_xs = torch.linspace(*decomposition_init_kwargs['unnorm'], decomposition_init_kwargs['subdomain_xs'][0].size)
+    subdomain_ws = torch.tensor(decomposition_init_kwargs['subdomain_ws'][0], device=device)
+    
+    for i in range(len(subdomain_xs)):
+        start = subdomain_xs[i] - subdomain_ws[i] / 2
+        end = subdomain_xs[i] + subdomain_ws[i] / 2
+        
+        # Compute the window function for the current subdomain
+        window_vals = cosine_window(t_vals, start, end, device)
+        
+        # Plot the window function for the current subdomain
+        plt.plot(t_vals.cpu().numpy(), window_vals.cpu().numpy(), label=f'Subdomain {i+1}')
+    
+    plt.title('Window Functions for Each Subdomain')
+    plt.xlabel('Input')
+    plt.ylabel('Window Value')
+    # plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    plt.grid(True)
+    # plt.show()
+    plt.savefig('spring_test_subdomain_windows.png')
+    plt.close()
+
 
 if __name__ == "__main__":
 
@@ -105,14 +165,17 @@ if __name__ == "__main__":
         'subdomain_ws': [0.15 * np.ones((15,))],  # with widths of 0.15
         'unnorm': (0., 1.),  # define unnormalisation of the subdomain networks
     }
+    plot_subdomain_windows(decomposition_init_kwargs, device)
+    model = SpringNN(decomposition_init_kwargs, device)
+    model.to(device)
 
-    model = SpringNN(device, **decomposition_init_kwargs)
+    # model = SpringNN(device, **decomposition_init_kwargs)
     # subnet_ranges = [(0, 0.4), (0.3, 0.7), (0.6, 1.0)]
     # model = SpringNN(num_subnets=3, subnet_ranges=subnet_ranges, device=device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
     for epoch in range(20001):
-        t = torch.rand((500, 1), device=device, requires_grad=True)
+        t = torch.rand((200, 1), device=device, requires_grad=True)
         
         loss = loss_fn(model, t)
         optimizer.zero_grad()
@@ -121,4 +184,4 @@ if __name__ == "__main__":
         
         if epoch % 1000 == 0:
             print(f'Epoch {epoch}, Loss: {loss.item()}')
-    viz(model, device)
+            viz(model, device)
