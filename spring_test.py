@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import grad
 import numpy as np
+import time
 
 # Constants
 m = 1.0  # mass
@@ -22,24 +23,36 @@ def cosine_window(x, xmin, xmax, device='cpu'):
     window = torch.where((x >= xmin) & (x <= xmax), window, torch.tensor(0.0, device=device))
     return window
 
+def norm(mu, sd, x):
+    return (x-mu)/sd
+
+def unnorm(mu, sd, x):
+    return x*sd + mu
+
+
 
 class SpringSubNN(nn.Module):
     def __init__(self, device, start, width):
         super(SpringSubNN, self).__init__()
         self.net = nn.Sequential(
-            nn.Linear(1, 50),
+            nn.Linear(1, 32),
             nn.Tanh(),
-            nn.Linear(50, 1)
+            nn.Linear(32, 1)
         ).to(device)
         self.start = start
         self.width = width
         self.device = device
+        # self.mu = 
 
     def forward(self, t):
         # Apply the window function within the forward method
         end = self.start + self.width
-        weight = cosine_window(t, self.start, end)
-        return weight * self.net(t)
+        window = cosine_window(t, self.start, end)
+        mu, sd = (self.start+self.width)/2, self.width/2
+        normalized_input = norm(mu, sd, t)
+        raw_value = self.net(normalized_input)
+        unnormalized_output = unnorm(mu, sd, raw_value)
+        return window * self.net(t)
     
     # def cosine_window(self, x, xmin, xmax):
     #     x_scaled = 2 * (x - xmin) / (xmax - xmin) - 1
@@ -71,6 +84,7 @@ def loss_fn(model, t):
     ones = torch.ones_like(u)
     u_t = grad(u, t, grad_outputs=ones, create_graph=True)[0]
     u_tt = grad(u_t, t, grad_outputs=ones, create_graph=True)[0]
+    # u_tt = 0
     
     de_loss = (m * u_tt + mu * u_t + k * u).pow(2).mean()
     
@@ -173,7 +187,7 @@ if __name__ == "__main__":
     # subnet_ranges = [(0, 0.4), (0.3, 0.7), (0.6, 1.0)]
     # model = SpringNN(num_subnets=3, subnet_ranges=subnet_ranges, device=device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-
+    start_time = time.time()
     for epoch in range(20001):
         t = torch.rand((200, 1), device=device, requires_grad=True)
         
@@ -185,3 +199,6 @@ if __name__ == "__main__":
         if epoch % 1000 == 0:
             print(f'Epoch {epoch}, Loss: {loss.item()}')
             viz(model, device)
+            end_time = time.time()
+            print(f"time:{end_time-start_time}")
+            start_time = end_time
