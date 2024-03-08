@@ -44,6 +44,8 @@ class SpringSubNN(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(1, 32),
             nn.Tanh(),
+            nn.Linear(32, 32),
+            nn.Tanh(),
             nn.Linear(32, 1)
         ).to(device)
         # self.start = torch.tensor(start, device=device)
@@ -85,7 +87,7 @@ class SpringSubNN(nn.Module):
         unnormalized_output = unnorm(mu, sd, raw_value)
         window = cosine_window(t, self.mid, self.width, self.device)
         output = window * unnormalized_output
-        return output
+        return output, window, unnormalized_output
 
     def predict(self, t):
         normalized_input = norm(self.mu, self.sd, t)
@@ -107,10 +109,20 @@ class SpringNN(nn.Module):
         self.device = device
 
     def forward(self, t):
-        output = 0
+        outputs = []
+        windows = []
         for subnet in self.subnets:
-            output += subnet(t)
-        return output
+            val, window, raw_val = subnet(t)
+            outputs.append(val)
+            windows.append(window)
+        #TODO: if divide by window
+        outputs = torch.stack(outputs, dim=0)
+        outputs = torch.sum(outputs, dim=0)
+        if True:
+            windows = torch.stack(windows, dim=0)
+            weight = torch.sum(windows, dim=0)
+            outputs = outputs/weight 
+        return outputs
 
     def subnet_outputs(self, t):
         return [subnet.predict(t) for subnet in self.subnets]
@@ -225,13 +237,13 @@ def sample_subdomain_points(model, t):
     # unnormalized_output = unnorm(model.mu, model.sd, raw_value)
     # window = cosine_window(t, model.start, model.end, model.device)
     # output = window * unnormalized_output
-    output = model(t)
+    output, window, raw_output = model(t)
     #     ones = torch.ones_like(u)
     # u_t = grad(u, t, grad_outputs=ones, create_graph=True)[0]
     # u_tt = grad(u_t, t, grad_outputs=ones, create_graph=True)[0]
     gradient = grad(output, t, grad_outputs=t, create_graph=True)[0]
     gradient2 = grad(gradient, t, grad_outputs=t, create_graph=True)[0]
-    return output, gradient, gradient2
+    return output, gradient, gradient2, window, raw_output
 
 #TODO: fix t issue
 def sum_overlapping_regions(outputs, gradients, gradient2s, subnets, ts):
@@ -249,14 +261,19 @@ def sum_overlapping_regions(outputs, gradients, gradient2s, subnets, ts):
                 gradient2s[i] = gradient2s[i] + overlap_window * gradient2_j.detach()
     return outputs, gradients, gradient2s
 
-def sum_all_regions(outputs, gradients, gradient2s):
+def sum_all_regions(outputs, gradients, gradient2s, windows):
     stacked_outputs = torch.stack(outputs, dim=0)
     stacked_gradients = torch.stack(gradients, dim=0)
     stacked_gradient2s = torch.stack(gradient2s, dim=0)
+    stacked_windows = torch.stack(windows, dim=0)
     
     total_outputs = torch.sum(stacked_outputs, dim=0)
     total_gradients = torch.sum(stacked_gradients, dim=0)
     total_gradient2s = torch.sum(stacked_gradient2s, dim=0)
+    total_windows = torch.sum(stacked_windows, dim=0)
+    total_outputs /= total_windows
+    total_gradients /= total_windows
+    total_gradient2s /= total_windows
     
     return total_outputs, total_gradients, total_gradient2s
 
@@ -266,19 +283,41 @@ def sum_all_regions(outputs, gradients, gradient2s):
 def train_step(model, optimizer, t):
     optimizer.zero_grad()
     outputs, gradients, gradient2s = [], [], []
+    windows, raw_values = [], []
     for subnet in model.subnets:
-        output, gradient, gradient2 = sample_subdomain_points(subnet, t)
+        output, gradient, gradient2, window, raw_value = sample_subdomain_points(subnet, t)
         outputs.append(output)
         gradients.append(gradient)
         gradient2s.append(gradient2)
+        windows.append(window)
+        raw_values.append(raw_value)
     # outputs, gradients, gradient2s = sum_overlapping_regions(outputs, gradients, gradient2s, model.subnets)
-    outputs, gradients, gradient2s = sum_all_regions(outputs, gradients, gradient2s)
+    outputs, gradients, gradient2s = sum_all_regions(outputs, gradients, gradient2s, windows)
     # Compute loss (including boundary conditions)
-    loss = loss_fn(model, t, outputs, gradients, gradient2s)
+    # loss, de_loss, ic_loss_u, ic_loss_v = loss_fn(model, t, outputs, gradients, gradient2s)
+    loss, de_loss, ic_loss_u, ic_loss_v = loss_fn_0(model, t)
     loss.backward()
     optimizer.step()
-    return loss
+    return loss, de_loss, ic_loss_u, ic_loss_v
 
+def loss_fn_0(model, t):
+    u = model(t)
+    ones = torch.ones_like(u)
+    u_t = grad(u, t, grad_outputs=ones, create_graph=True)[0]
+    u_tt = grad(u_t, t, grad_outputs=ones, create_graph=True)[0]
+    # u_tt = 0
+    
+    de_loss = (M * u_tt + MU * u_t + K * u).pow(2).mean()
+    
+    t0 = torch.tensor([[0.0]], device=model.device, requires_grad=True)
+    u0_ = model(t0)
+    ut0_ = grad(u0_, t0, create_graph=True)[0]
+    
+    ic_loss_u = 1e6 * (u0_ - U0).pow(2)
+    ic_loss_v = 1e2 * (ut0_ - V0).pow(2)
+    
+    total_loss = de_loss + ic_loss_u + ic_loss_v
+    return total_loss, de_loss, ic_loss_u, ic_loss_v
 
 # def loss_fn(model, t):
 #     u = model(t)
@@ -342,13 +381,13 @@ def loss_fn(model, t, outputs, gradients, gradient2s):
     
     # Calculate initial condition losses for the batch
     # Note: U0 and V0 are scalars, so they broadcast to match the batch size automatically
-    ic_loss_u = ((u0_batch - U0).pow(2)).mean()
-    ic_loss_v = ((ut0_batch - V0).pow(2)).mean()
+    ic_loss_u = 1e4*((u0_batch - U0).pow(2)).mean()
+    ic_loss_v = 1e2*((ut0_batch - V0).pow(2)).mean()
     
     # Sum the differential equation loss with the initial condition losses
     total_loss = de_loss + ic_loss_u + ic_loss_v
     
-    return total_loss
+    return total_loss, de_loss, ic_loss_u, ic_loss_v
 
 
 
@@ -362,11 +401,17 @@ if __name__ == "__main__":
         'unnorm': (0., 1.),  # define unnormalisation of the subdomain networks
     }
 
-    decomposition_init_kwargs = {
-        'subdomain_xs': np.linspace(0, 1, 5),  # 15 equally spaced subdomains
-        'subdomain_ws': 0.75 * np.ones((5,)),  # with widths of 0.15
-        'unnorm': (0., 1.),  # define unnormalisation of the subdomain networks
-    }
+    # decomposition_init_kwargs = {
+    #     'subdomain_xs': np.linspace(0, 1, 5),  # 15 equally spaced subdomains
+    #     'subdomain_ws': 0.75 * np.ones((5,)),  # with widths of 0.15
+    #     'unnorm': (0., 1.),  # define unnormalisation of the subdomain networks
+    # }
+
+    # decomposition_init_kwargs = {
+    #     'subdomain_xs': np.linspace(0, 1, 1),  # 15 equally spaced subdomains
+    #     'subdomain_ws': 3 * np.ones((1,)),  # with widths of 0.15
+    #     'unnorm': (0., 1.),  # define unnormalisation of the subdomain networks
+    # }
     plot_subdomain_windows(decomposition_init_kwargs, device)
     model = SpringNN(decomposition_init_kwargs, device)
     model.to(device)
@@ -377,10 +422,11 @@ if __name__ == "__main__":
     for epoch in range(20001):
         t = torch.rand((200, 1), device=device, requires_grad=True)
         
-        loss = train_step(model, optimizer, t)
+        loss, de_loss, ic_loss_u, ic_loss_v = train_step(model, optimizer, t)
         
         if epoch % 1000 == 0:
             print(f'Epoch {epoch}, Loss: {loss.item()}')
+            print(f"physics loss:{de_loss}, u0 loss: {ic_loss_u}, v0 loss: {ic_loss_v}" )
             viz(model, device)
             end_time = time.time()
             print(f"time:{end_time-start_time}")
