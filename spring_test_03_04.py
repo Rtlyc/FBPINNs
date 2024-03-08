@@ -298,7 +298,7 @@ def train_step(model, optimizer, t):
     
 #     return de_loss + ic_loss_u + ic_loss_v
 # Loss Function Modification
-def loss_fn(model, t, outputs, gradients, gradient2s):
+def loss_fn_2(model, t, outputs, gradients, gradient2s):
     # Calculate the physics-informed part of the loss function
     de_loss = 0.0
     for output, gradient, gradient2 in zip(outputs, gradients, gradient2s):
@@ -323,6 +323,33 @@ def loss_fn(model, t, outputs, gradients, gradient2s):
     total_loss = de_loss + ic_loss_u + ic_loss_v
     
     return total_loss
+
+
+def loss_fn(model, t, outputs, gradients, gradient2s):
+    # Assuming outputs, gradients, and gradient2s are batched tensors
+    # Calculate the physics-informed part of the loss function for the entire batch
+    u_t = gradients
+    u_tt = gradient2s
+    
+    # Physics-based loss calculated over the batch
+    de_loss = (M * u_tt + MU * u_t + K * outputs).pow(2).mean()
+    
+    # Apply initial conditions at t=0 for the entire batch
+    # Note: The initial condition is the same for all batch items, so we broadcast them
+    t0_batch = torch.tensor([[0.0]] * t.size(0), device=model.device, requires_grad=True)
+    u0_batch = model(t0_batch)
+    ut0_batch = grad(u0_batch.sum(), t0_batch, create_graph=True)[0]
+    
+    # Calculate initial condition losses for the batch
+    # Note: U0 and V0 are scalars, so they broadcast to match the batch size automatically
+    ic_loss_u = ((u0_batch - U0).pow(2)).mean()
+    ic_loss_v = ((ut0_batch - V0).pow(2)).mean()
+    
+    # Sum the differential equation loss with the initial condition losses
+    total_loss = de_loss + ic_loss_u + ic_loss_v
+    
+    return total_loss
+
 
 
 # Main Logic
