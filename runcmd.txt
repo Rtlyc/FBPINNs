@@ -7,11 +7,3 @@ jupyter notebook --ip 0.0.0.0 --no-browser --allow-root
 
 
 
-Dear Professor,
-
-I am writing to express my regret in regards to the second homework assignment. I completed Lab 2 individually, however, I made a wrong decision sending my code to another classmate. I understand this is a serious issue, and I deeply regret it. I would never allow this to happen again.
-
-I would appreciate the opportunity to discuss this matter in your office hour on Tuesday.  Again, I am truly sorry for my actions.
-
-Best,
-Yuchen Liu 
