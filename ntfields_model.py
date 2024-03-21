@@ -15,7 +15,7 @@ from torch.autograd import Variable, grad
 import matplotlib
 import matplotlib.pylab as plt
 
-import pickle5 as pickle 
+import pickle 
 
 from nn import NN
 from fb_data import generate_sphere_data, FastTensorDataLoader

@@ -381,6 +381,7 @@ def get_inputs(x_batch, active, all_params, decomposition):
     np = jnp.stack([n_take, pous[m_take,0]], axis=-1).astype(int)# points and pous
     logger.debug(str_tensor(np))
     npu,p_take = jnp.unique(np, axis=0, return_inverse=True)# unique points and pous (sorted), point-pou takes
+    p_take = p_take.squeeze()# (n,) point-pou takes
     np_take = npu[:,0]
     logger.debug(str_tensor(p_take))
     logger.debug(str_tensor(np_take))

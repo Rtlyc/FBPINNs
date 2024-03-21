@@ -1,3 +1,9 @@
 *.pyc
 *.npy
 *.png
+*.ipynb
+*.jax
+
+Experiments
+examples
+results

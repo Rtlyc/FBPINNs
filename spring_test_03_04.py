@@ -282,17 +282,17 @@ def sum_all_regions(outputs, gradients, gradient2s, windows):
 
 def train_step(model, optimizer, t):
     optimizer.zero_grad()
-    outputs, gradients, gradient2s = [], [], []
-    windows, raw_values = [], []
-    for subnet in model.subnets:
-        output, gradient, gradient2, window, raw_value = sample_subdomain_points(subnet, t)
-        outputs.append(output)
-        gradients.append(gradient)
-        gradient2s.append(gradient2)
-        windows.append(window)
-        raw_values.append(raw_value)
+    # outputs, gradients, gradient2s = [], [], []
+    # windows, raw_values = [], []
+    # for subnet in model.subnets:
+    #     output, gradient, gradient2, window, raw_value = sample_subdomain_points(subnet, t)
+    #     outputs.append(output)
+    #     gradients.append(gradient)
+    #     gradient2s.append(gradient2)
+    #     windows.append(window)
+    #     raw_values.append(raw_value)
     # outputs, gradients, gradient2s = sum_overlapping_regions(outputs, gradients, gradient2s, model.subnets)
-    outputs, gradients, gradient2s = sum_all_regions(outputs, gradients, gradient2s, windows)
+    # outputs, gradients, gradient2s = sum_all_regions(outputs, gradients, gradient2s, windows)
     # Compute loss (including boundary conditions)
     # loss, de_loss, ic_loss_u, ic_loss_v = loss_fn(model, t, outputs, gradients, gradient2s)
     loss, de_loss, ic_loss_u, ic_loss_v = loss_fn_0(model, t)

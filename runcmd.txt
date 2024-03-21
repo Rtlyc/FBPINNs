@@ -1,4 +1,4 @@
-docker run -it --gpus=all -v "/home/rtlyc/linux/FBPINNs:/app" -p 8888:8888 --rm fbpinn:latest
+docker run -it --gpus=all -v "/home/rtlyc/linux/FBPINNs:/app" -p 8888:8888 --rm fbpinns:latest
 
 source activate fbpinns
 
