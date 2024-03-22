@@ -31,11 +31,12 @@ def unnorm(mu, sd, x):
 
 def plot_subdomain_windows(decomposition_init_kwargs, device='cpu'):
     # Prepare the input range (e.g., 0 to 1)
-    t_vals = torch.linspace(0, 1, 1000, device=device)
+    t_vals = torch.linspace(-0.5, 0.5, 1000, device=device)
     
     plt.figure(figsize=(10, 6))
     
-    subdomain_xs = torch.linspace(*decomposition_init_kwargs['unnorm'], decomposition_init_kwargs['subdomain_xs'].size)
+    # subdomain_xs = torch.linspace(*decomposition_init_kwargs['unnorm'], decomposition_init_kwargs['subdomain_xs'].size)
+    subdomain_xs = torch.tensor(decomposition_init_kwargs['subdomain_xs'], device=device)
     subdomain_ws = torch.tensor(decomposition_init_kwargs['subdomain_ws'], device=device)
     
     for i in range(len(subdomain_xs)):
@@ -68,7 +69,7 @@ class NTSubNN(torch.nn.Module):
         self.device = device
         self.mid = mid
         self.width = width
-        self.B = 1 * torch.normal(0,1,size=(128,self.dim)) #0.5
+        self.B = 0.05 * torch.normal(0,1,size=(128,self.dim)) #0.5
         self.network = NN(self.device, self.dim, self.B)
         self.network.apply(self.network.init_weights)
         self.network.to(self.device)
@@ -76,9 +77,10 @@ class NTSubNN(torch.nn.Module):
     def forward(self, x):
         norm_x = norm(self.mid, self.width, x)
         tau, Xp = self.network.out(norm_x)
-        mu = 0
-        sd = 1 
-        unnorm_tau = unnorm(mu, sd, tau)
+        # mu = 0
+        # sd = 1 
+        # unnorm_tau = unnorm(mu, sd, tau)
+        unnorm_tau = tau
         #! use start x coordinate to get the window
         window = cosine_window(x[:, 0, None], self.mid, self.width, self.device)
         return window * unnorm_tau, window, tau  
@@ -517,7 +519,7 @@ if __name__ == "__main__":
             start_time = end_time
 
             #! Visualize the model
-            src = torch.tensor([0.0, -0.4])
+            src = torch.tensor([-0.1, -0.4])
             model.plot2d(src, None, epoch, loss.item(), 1.0)
 
 

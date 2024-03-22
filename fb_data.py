@@ -59,7 +59,7 @@ def generate_sphere_data(limit=1, radius=0.5, minimum=0.1, maximum=1, sample_siz
         # generate uniform distance from start_points
         direction = torch.rand(sample_size*8, 2)*2 - 1
         direction = direction / torch.sqrt(torch.sum(direction**2, axis=1, keepdim=True))
-        delta_length = torch.rand(sample_size*8, 1) * 1.0
+        delta_length = torch.rand(sample_size*8, 1) * 1.5
         end_points = start_points + direction * delta_length
         start_points *= limit
         end_points *= limit 
@@ -67,7 +67,7 @@ def generate_sphere_data(limit=1, radius=0.5, minimum=0.1, maximum=1, sample_siz
 
         sdf_s = torch.sqrt(torch.sum(start_points**2, axis=1)) - radius
         sdf_e = torch.sqrt(torch.sum(end_points**2, axis=1)) - radius
-        valid = (sdf_s>=0) & (sdf_e>=0) & (sdf_s<maximum)
+        valid = (sdf_s>=0) & (sdf_e>=0) & (sdf_s<maximum) & (sdf_e<limit)
         sdf_s = sdf_s[valid, None]
         sdf_e = sdf_e[valid, None]
         start_points = start_points[valid]
