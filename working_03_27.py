@@ -272,7 +272,7 @@ class NN(torch.nn.Module):
 
     def out(self, coords):
         
-        coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+        # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
         size = coords.shape[0]
         x0 = coords[:,:self.dim]
         x1 = coords[:,self.dim:]
@@ -887,6 +887,14 @@ class NN(torch.nn.Module):
         return output, coords
 
 
+def cosine_window(x, mid, width, device='cpu'):
+    xmin = mid - width/2 
+    xmax = mid + width/2
+    x_scaled = x-mid 
+    window = torch.cos(torch.pi/width*x_scaled)
+    window = torch.where((x>=xmin) & (x<=xmax), window, torch.tensor(0.0, device=device))
+    return window
+
 class SubModel(torch.nn.Module):
     def __init__(self, dim, mid, width, device):
         super(SubModel, self).__init__()
@@ -901,8 +909,11 @@ class SubModel(torch.nn.Module):
         self.network.to(self.device)
 
     def out(self, x):
-        tau, Xp = self.network.out(x)
-        return tau, Xp
+        tau, _ = self.network.out(x)
+        window = cosine_window(x[:, 0, None], self.mid, self.width, self.device)
+        windowed_tau = window * tau 
+        return windowed_tau, window
+
 
 class Model(torch.nn.Module):
     def __init__(self, ModelPath, DataPath, dim, device='cpu'):
@@ -956,9 +967,9 @@ class Model(torch.nn.Module):
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer)
 
     def out(self, x):
-        # x = x.clone().detach().requires_grad_(True)
-        output, Xp = self.subnets[0].out(x)
-        return output, Xp 
+        x = x.clone().detach().requires_grad_(True)
+        windowed_output, window = self.subnets[0].out(x)
+        return windowed_output/window, x
     
     def gradient(self, y, x, create_graph=True):                                                               
                                                                                   
