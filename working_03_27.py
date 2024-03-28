@@ -953,7 +953,7 @@ class Model(torch.nn.Module):
         self.init_dataset()
 
     def init_network(self):
-        params = [(0, 2)]
+        params = [(-0.5, 0.5), (-0.25, 0.5), (0, 0.5), (0.25, 0.5), (0.5, 0.5)]
         self.subnets = torch.nn.ModuleList([SubModel(self.dim, mid, width, self.device) for mid, width in params])
         # Defining the optimization scheme
 
@@ -968,8 +968,16 @@ class Model(torch.nn.Module):
 
     def out(self, x):
         x = x.clone().detach().requires_grad_(True)
-        windowed_output, window = self.subnets[0].out(x)
-        return windowed_output/window, x
+        w_outputs, ws = [], []
+        for subnet in self.subnets:
+            windowed_output, window = subnet.out(x)
+            w_outputs.append(windowed_output)
+            ws.append(window)
+        w_outputs = torch.stack(w_outputs, dim=0)
+        w_outputs = torch.sum(w_outputs, dim=0)
+        ws = torch.stack(ws, dim=0)
+        ws = torch.sum(ws, dim=0)
+        return w_outputs/ws, x
     
     def gradient(self, y, x, create_graph=True):                                                               
                                                                                   
