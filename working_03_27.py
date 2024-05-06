@@ -887,7 +887,8 @@ class NN(torch.nn.Module):
         return output, coords
 
 
-def cosine_window(x, mid, width, device='cpu'):
+def cosine_window(x, region, device='cpu'):
+    mid, width = region
     xmin = mid - width/2 
     xmax = mid + width/2
     x_scaled = x-mid 
@@ -895,13 +896,84 @@ def cosine_window(x, mid, width, device='cpu'):
     window = torch.where((x>=xmin) & (x<=xmax), window, torch.tensor(0.0, device=device))
     return window
 
+def cosine_2d(xmin, xmax, ymin, ymax, x, y):
+    mu_x, sd_x = (xmin + xmax) / 2, (xmax - xmin) / 2
+    mu_y, sd_y = (ymin + ymax) / 2, (ymax - ymin) / 2
+    
+    w_x = ((1 + torch.cos(torch.pi * (x - mu_x) / sd_x)) / 2) ** 2
+    w_y = ((1 + torch.cos(torch.pi * (y - mu_y) / sd_y)) / 2) ** 2
+    
+    w_x = torch.where((x>=xmin) & (x<=xmax), w_x, torch.tensor(0.0))
+    w_y = torch.where((y>=ymin) & (y<=ymax), w_y, torch.tensor(0.0))
+
+    return w_x * w_y
+
+def plot_window_2d(regions, savepath):
+    xmin, xmax, ymin, ymax = -0.5, 0.5, -0.5, 0.5
+    n = 100  # resolution of the grid
+    x = torch.linspace(xmin, xmax, n)
+    y = torch.linspace(ymin, ymax, n)
+    xx, yy = torch.meshgrid(x, y, indexing="ij")
+
+    plt.figure(figsize=(12, 10))
+    for i, (xmin, xmax, ymin, ymax) in enumerate(regions, 1):
+        weights = cosine_2d(torch.tensor(xmin), torch.tensor(xmax), torch.tensor(ymin), torch.tensor(ymax), xx, yy)
+        plt.subplot(2, 2, i)
+        cp = plt.contourf(xx.numpy(), yy.numpy(), weights.numpy(), levels=50, cmap='viridis')
+        plt.colorbar(cp)
+        plt.title(f'Region {i}: [{xmin},{xmax}] x [{ymin},{ymax}]')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.gca().set_aspect('equal', adjustable='box')
+
+    plt.tight_layout()
+    plt.savefig(savepath + "/window_2d_plot.png")
+
+import torch
+import matplotlib.pyplot as plt
+
+def plot_window_2d_normalized(regions, savepath):
+    xmin, xmax, ymin, ymax = -0.5, 0.5, -0.5, 0.5
+    n = 100  # resolution of the grid
+    x = torch.linspace(xmin, xmax, n)
+    y = torch.linspace(ymin, ymax, n)
+    xx, yy = torch.meshgrid(x, y, indexing="ij")
+
+    # Compute weights for all regions and store them
+    all_weights = []
+    for region in regions:
+        xmin, xmax, ymin, ymax = region
+        weights = cosine_2d(torch.tensor(xmin), torch.tensor(xmax), torch.tensor(ymin), torch.tensor(ymax), xx, yy)
+        all_weights.append(weights)
+
+    # Calculate the sum of all weights
+    total_weights = torch.stack(all_weights).sum(dim=0)
+
+    plt.figure(figsize=(12, 10))
+    for i, region in enumerate(regions, 1):
+        # Normalize the weights for this region
+        normalized_weights = all_weights[i - 1] / total_weights
+        plt.subplot(2, 2, i)
+        cp = plt.contourf(xx.numpy(), yy.numpy(), normalized_weights.numpy(), levels=50, cmap='viridis')
+        plt.colorbar(cp)
+        xmin, xmax, ymin, ymax = region
+        plt.title(f'Region {i}: [{xmin},{xmax}] x [{ymin},{ymax}]')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.gca().set_aspect('equal', adjustable='box')
+
+    plt.tight_layout()
+    plt.savefig(savepath + "/window_2d_plot_normalized.png")
+
+# Note: The cosine_2d function needs to be defined or imported to use this code.
+
+
 class SubModel(torch.nn.Module):
-    def __init__(self, dim, mid, width, device):
+    def __init__(self, dim, region, device):
         super(SubModel, self).__init__()
         self.dim = dim
         self.device = device 
-        self.mid = mid 
-        self.width = width 
+        self.region = region 
 
         self.B = 0.5 * torch.normal(0,1,size=(128,self.dim)) #0.5
         self.network = NN(self.device, self.dim, self.B)
@@ -910,9 +982,10 @@ class SubModel(torch.nn.Module):
 
     def out(self, x):
         tau, _ = self.network.out(x)
-        window = cosine_window(x[:, 0, None], self.mid, self.width, self.device)
+        # window = cosine_window(x[:, 0, None], self.region, self.device)
+        window = cosine_2d(*self.region, x[:, 0, None], x[:, 1, None])
         windowed_tau = window * tau 
-        return windowed_tau, window
+        return windowed_tau, window, tau
 
 
 class Model(torch.nn.Module):
@@ -953,12 +1026,22 @@ class Model(torch.nn.Module):
         self.init_dataset()
 
     def init_network(self):
-        params = [(-0.5, 0.5), (-0.25, 0.5), (0, 0.5), (0.25, 0.5), (0.5, 0.5)]
-        self.subnets = torch.nn.ModuleList([SubModel(self.dim, mid, width, self.device) for mid, width in params])
-        # Defining the optimization scheme
+        #? 1D window
+        # params = [(-0.5, 0.5), (-0.25, 0.5), (0, 0.5), (0.25, 0.5), (0.5, 0.5)]
+        # self.subnets = torch.nn.ModuleList([SubModel(self.dim, mid, width, self.device) for mid, width in params])
 
-        
-        #self.load('./Experiments/Gib/Model_Epoch_05000_ValLoss_6.403462e-03.pt')
+        #? 2D window
+        # xmin, xmax, ymin, ymax
+        self.regions = [
+            (-0.5, 0.25, -0.25, 0.5),   # Top Left
+            (-0.25, 0.5, -0.25, 0.5),    # Top Right
+            (-0.5, 0.25, -0.5, 0.25),  # Bottom Left
+            (-0.25, 0.5, -0.5, 0.25),   # Bottom Right
+        ]
+        plot_window_2d(self.regions, self.Params['ModelPath'])
+        plot_window_2d_normalized(self.regions, self.Params['ModelPath'])
+        self.subnets = torch.nn.ModuleList([SubModel(self.dim, region, self.device) for region in self.regions])
+
 
         self.optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.Params['Training']['Learning Rate']
@@ -968,16 +1051,18 @@ class Model(torch.nn.Module):
 
     def out(self, x):
         x = x.clone().detach().requires_grad_(True)
-        w_outputs, ws = [], []
+        w_outputs, windows, raws = [], [], []
         for subnet in self.subnets:
-            windowed_output, window = subnet.out(x)
+            windowed_output, window, raw_output = subnet.out(x)
             w_outputs.append(windowed_output)
-            ws.append(window)
+            windows.append(window)
+            raws.append(raw_output)
         w_outputs = torch.stack(w_outputs, dim=0)
-        w_outputs = torch.sum(w_outputs, dim=0)
-        ws = torch.stack(ws, dim=0)
-        ws = torch.sum(ws, dim=0)
-        return w_outputs/ws, x
+        outputs = torch.sum(w_outputs, dim=0)
+        windows = torch.stack(windows, dim=0)
+        ws  = torch.sum(windows, dim=0)
+        raws = torch.stack(raws, dim=0)
+        return outputs/ws, x, raws, windows
     
     def gradient(self, y, x, create_graph=True):                                                               
                                                                                   
@@ -991,7 +1076,7 @@ class Model(torch.nn.Module):
         
       
         start=time.time()
-        tau, Xp = self.out(points)
+        tau, Xp, _, _ = self.out(points)
         dtau = self.gradient(tau, Xp)
         end=time.time()
         
@@ -1083,7 +1168,7 @@ class Model(torch.nn.Module):
         )
         '''
         
-    def train(self):
+    def train_model(self):
         beta = 1.0
         prev_diff = 1.0
         current_diff = 1.0
@@ -1098,6 +1183,7 @@ class Model(torch.nn.Module):
         prev_optimizer_queue = []
 
         for epoch in range(1, self.Params['Training']['Number of Epochs']+1):
+            model.train()
             t_0=time.time()
             
             print_every = 1
@@ -1211,6 +1297,7 @@ class Model(torch.nn.Module):
             tt=time.time()
             #print(tt-t_tmp)
             #print('')
+            # model.eval()
             if epoch % self.Params['Training']['Print Every * Epoch'] == 0:
                 with torch.no_grad():
                     #print("Epoch = {} -- Training loss = {:.4e} -- Validation loss = {:.4e}".format(
@@ -1257,7 +1344,7 @@ class Model(torch.nn.Module):
         # Apply projection from LatLong to UTM
         Xp = Xp.to(torch.device(self.Params['Device']))
         
-        tau, coords = self.out(Xp)
+        tau, coords, _, _ = self.out(Xp)
 
        
         D = Xp[:,self.dim:]-Xp[:,:self.dim]
@@ -1272,14 +1359,14 @@ class Model(torch.nn.Module):
     def Tau(self, Xp):
         Xp = Xp.to(torch.device(self.Params['Device']))
      
-        tau, coords = self.out(Xp)
+        tau, coords, _, _ = self.out(Xp)
 
         return tau
 
     def Speed(self, Xp):
         Xp = Xp.to(torch.device(self.Params['Device']))
 
-        tau, Xp = self.out(Xp)
+        tau, Xp, _, _ = self.out(Xp)
         dtau = self.gradient(tau, Xp)
         #Xp.requires_grad_()
         #tau, dtau, coords = self.network.out_grad(Xp)
@@ -1309,7 +1396,7 @@ class Model(torch.nn.Module):
         
         #tau, dtau, coords = self.network.out_grad(Xp)
 
-        tau, Xp = self.out(Xp)
+        tau, Xp, _, _ = self.out(Xp)
         dtau = self.gradient(tau, Xp)
         
         D = Xp[:,self.dim:]-Xp[:,:self.dim]
@@ -1375,8 +1462,8 @@ class Model(torch.nn.Module):
         ax.contour(X,Y,TT,np.arange(0,10,0.02), cmap='bone', linewidths=0.5)#0.25
         plt.colorbar(quad1,ax=ax, pad=0.1, label='Predicted Velocity')
         plt.savefig(self.Params['ModelPath']+"/plots"+str(epoch)+"_"+str(alpha)+"_"+str(round(total_train_loss,4))+"_0.jpg",bbox_inches='tight')
-
         plt.close(fig)
+
         fig = plt.figure()
         ax = fig.add_subplot(111)
         quad1 = ax.pcolormesh(X,Y,TAU,vmin=0,vmax=1)
@@ -1385,6 +1472,56 @@ class Model(torch.nn.Module):
         plt.savefig(self.Params['ModelPath']+"/tauplots"+str(epoch)+"_"+str(alpha)+"_"+str(round(total_train_loss,4))+"_0.jpg",bbox_inches='tight')
 
         plt.close(fig)
+
+
+        if True:
+            #! plot four figure
+            plt.figure(figsize=(12, 10))
+            XP = XP.clone().detach().requires_grad_(True)
+            _, XP, raws, windows = self.out(XP)
+            all_weights = []
+            for region in self.regions:
+                xmin, xmax, ymin, ymax = region 
+                weights = cosine_2d(torch.tensor(xmin), torch.tensor(xmax), torch.tensor(ymin), torch.tensor(ymax), XP[:, 0, None], XP[:, 1, None])
+                all_weights.append(weights)
+            
+            total_weights = torch.stack(all_weights).sum(dim=0)
+            for i, subnet in enumerate(self.subnets):
+                window = cosine_2d(*self.regions[i], XP[:, 0, None], XP[:, 1, None])
+                windowed_tau = raws[i]*windows[i]/total_weights
+                D = XP[:,self.dim:]-XP[:,:self.dim]
+        
+                T0 = torch.einsum('ij,ij->i', D, D)
+
+                TT = torch.sqrt(T0)/windowed_tau[:, 0]
+
+                dtau = self.gradient(windowed_tau[i], XP)
+                DT1 = dtau[:,self.dim:]
+
+                T1    = T0*torch.einsum('ij,ij->i', DT1, DT1)
+                T2    = 2*windowed_tau[:,0]*torch.einsum('ij,ij->i', DT1, D)
+
+                T3    = windowed_tau[:,0]**2
+                
+                S = (T1-T2+T3)
+
+                Ypred = T3 / torch.sqrt(S)
+                TT = TT.to('cpu').data.numpy().reshape(X.shape)
+                V = Ypred.to('cpu').data.numpy().reshape(X.shape)
+                V[np.isnan(V)] = 0
+
+                plt.subplot(2, 2, i+1)
+                plt.pcolormesh(X,Y,V,vmin=0,vmax=1)
+                plt.contour(X,Y,TT,np.arange(0,10,0.02), cmap='bone', linewidths=0.5)#0.25
+                plt.xlabel('X')
+                plt.ylabel('Y')
+                plt.title(f'{i} subnet')
+                plt.gca().set_aspect('equal', adjustable='box')
+
+                del D, T0, TT, dtau, DT1, T1, T2, T3, S
+            
+            plt.tight_layout()
+            plt.savefig(self.Params['ModelPath']+f"/subnet_output_{str(epoch)}.png")
 
 
 if __name__ == "__main__":
@@ -1396,4 +1533,4 @@ if __name__ == "__main__":
         os.makedirs(folder)
     model = Model(folder, datapath, 2, "cuda")
 
-    model.train()
+    model.train_model()
