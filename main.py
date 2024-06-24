@@ -13,7 +13,7 @@ import math
 from torch.nn import Linear
 from torch.autograd import Variable
 from torch import Tensor
-from models import NN
+from models import NN_0624 as NN
 
 
 class FastTensorDataLoader:
@@ -123,9 +123,9 @@ class SubModel(torch.nn.Module):
         self.B = 0.5*torch.normal(0,1, size=(128,self.dim), device=self.device).T
         # self.b = 10*torch.rand(1, 128)
 
-        self.nl = 3
+        self.nl = 4
         self.input_size = self.B.shape[1]
-        self.h_size = 32
+        self.h_size = 128
 
         self.init_network()
         self.apply(self.init_weights)
@@ -227,9 +227,9 @@ class Model(torch.nn.Module):
             (-0.75, 0.25, -0.75, 0.25),  # Bottom Left
             (-0.25, 0.75, -0.75, 0.25),   # Bottom Right
         ]
-        # self.regions = [
-        #     (-1, 1, -1, 1),   # for all
-        # ]
+        self.regions = [
+            (-1, 1, -1, 1),   # for all
+        ]
 
         plot_window_2d_normalized(self.regions, self.folder)
         self.subnets = torch.nn.ModuleList([SubModel(self.dim, region, self.device) for region in self.regions])
@@ -314,7 +314,7 @@ class Model(torch.nn.Module):
         self.alpha = 1.0
         self.initial_view = Tensor([-0.3, -0.2, 0])
         while True:
-            if True:
+            if False:
                 #? by frame sequence
                 frame_data = self.explored_data[self.frame_idx]
                 frame_data = torch.tensor(frame_data).to(self.Params['Device'])
@@ -417,7 +417,7 @@ class Model(torch.nn.Module):
                 current_diff = total_diff
                 diff_ratio = current_diff/prev_diff
         
-                if True and (diff_ratio < 1.2 and diff_ratio > 0 or e < 10):#1.5
+                if True and (diff_ratio < 3.2 and diff_ratio > 0 or e < 10):#1.5
                     #self.optimizer.param_groups[0]['lr'] = prev_lr 
                     break
                 else:
@@ -553,7 +553,7 @@ class Model(torch.nn.Module):
         #     ax.plot(self.trajectory[:, 0], self.trajectory[:, 1], color='red', marker='o', markersize=0.8, linestyle='-', linewidth=1)
             
 
-        ax.contour(X,Y,TT,np.arange(0,5,0.02), cmap='bone', linewidths=0.3)#0.25
+        ax.contour(X,Y,TT,np.arange(0,5,0.01), cmap='bone', linewidths=0.3)#0.25
         plt.colorbar(quad1,ax=ax, pad=0.1, label='Predicted Velocity')
         plt.savefig(self.folder+"/plots"+str(epoch)+"_"+str(alpha)+"_"+str(round(total_train_loss,4))+"_0.png",bbox_inches='tight')
 
@@ -584,7 +584,7 @@ class Model(torch.nn.Module):
             for i, region in enumerate(self.regions, 1):
                 weighted_output = weighted_outputs[i - 1].to('cpu').data.reshape(X.shape)
                 # change nan to 0
-                weighted_output = torch.where(torch.isnan(weighted_output), torch.zeros_like(weighted_output), weighted_output) 
+                # weighted_output = torch.where(torch.isnan(weighted_output), torch.zeros_like(weighted_output), weighted_output) 
 
                 plt.subplot(2, 2, i)
                 plt.gca().set_aspect('equal', adjustable='box')
