@@ -13,59 +13,123 @@ def lip_norm(w):
     #print(w.shape)
     return w * scale.unsqueeze(1)
 
+
+# def lip_norm(self, w):
+#         #y = x@w.T+b
+#         absrowsum = torch.sqrt(torch.sum (  w**2 , dim =1))
+#         #print(absrowsum.shape)
+#         scale = torch.clamp (1 / absrowsum ,max=1)#.squeeze()
+#         #scale = self.actout(torch.exp(100*c[0,0]**2) / absrowsum )
+#         #scale = c[0,0]**2/absrowsum#torch.clamp (torch.exp(100*c[0,0]) / absrowsum ,max=1)
+#         #print(scale.shape)
+#         #print(w.shape)
+#         return w * scale.unsqueeze(1) #[: , None ]
+
+def normalization(w, softplus_ci):
+    absrowsum = torch.sum(torch.abs(w), dim=1)
+    scale = torch.min(torch.tensor(1.0), softplus_ci / absrowsum)
+    return w * scale.unsqueeze(1)
+
 class SubNN(nn.Module):
     def __init__(self):
         super(SubNN, self).__init__()
 
+    # @staticmethod
+    # def init_network(nl, input_size, h_size):
+    #     encoder = torch.nn.ModuleList()
+    #     encoder1 = torch.nn.ModuleList()
+    #     encoder.append(Linear(2*input_size, h_size))
+    #     encoder1.append(Linear(h_size, h_size))
+
+    #     for i in range(nl):
+    #         encoder.append(Linear(h_size, h_size))
+    #         encoder1.append(Linear(h_size, h_size))
+    #     encoder.append(Linear(h_size, h_size))
+    #     return encoder, encoder1
+    
     @staticmethod
     def init_network(nl, input_size, h_size):
         encoder = torch.nn.ModuleList()
-        encoder1 = torch.nn.ModuleList()
         encoder.append(Linear(2*input_size, h_size))
-        encoder1.append(Linear(h_size, h_size))
+        layer_sizes = [64, 64, 64, 64, 128]
 
         for i in range(nl):
             encoder.append(Linear(h_size, h_size))
-            encoder1.append(Linear(h_size, h_size))
-        encoder.append(Linear(h_size, h_size))
-        return encoder, encoder1
+        encoder.append(Linear(h_size, 256))
+        return encoder
     
 
     
-    # @staticmethod
-    # def encoder_out(self, coords):
-    #     # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
-    #     size = coords.shape[0]
-    #     x0 = coords[:,:self.dim]
-    #     x1 = coords[:,self.dim:]
-        
-    #     x = torch.vstack((x0,x1))
-        
-    #     x = self.input_mapping(x)
-    #     w = self.encoder[0].weight
-    #     b = self.encoder[0].bias
-
-    #     #c = self.encoder_lip[0].weight
-    #     w = lip_norm(w)
-
-    #     y = x@w.T+b
-    #     x = torch.sin(2*y)
-
-    #     for ii in range(1,self.nl):
-    #         w = self.encoder[ii].weight
-    #         b = self.encoder[ii].bias
-
-    #         #c = self.encoder_lip[ii].weight
-    #         w = lip_norm(w)
-
-    #         y = x@w.T+b
-    #         x  = torch.sin(2*y)
-
-    #     # x = self.encoder[-1](x)
-    #     return x, coords
-
     @staticmethod
     def encoder_out(self, coords):
+        # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+        size = coords.shape[0]
+        x0 = coords[:,:self.dim]
+        x1 = coords[:,self.dim:]
+        
+        x = torch.vstack((x0,x1))
+        
+        x = self.input_mapping(x)
+        w = self.encoder[0].weight
+        b = self.encoder[0].bias
+
+        #c = self.encoder_lip[0].weight
+        w = lip_norm(w)
+
+        y = x@w.T+b
+        x = torch.sin(2*y)
+
+        for ii in range(1,self.nl):
+            w = self.encoder[ii].weight
+            b = self.encoder[ii].bias
+
+            #c = self.encoder_lip[ii].weight
+            w = lip_norm(w)
+
+            y = x@w.T+b
+            x  = torch.sin(2*y)
+
+        # x = self.encoder[-1](x)
+        return x, coords
+
+    @staticmethod
+    def encoder_out_nowork(self, coords):
+        # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+        size = coords.shape[0]
+        x0 = coords[:,:self.dim]
+        x1 = coords[:,self.dim:]
+        
+        x = torch.vstack((x0,x1))
+        
+        x = self.input_mapping(x)
+        w = self.encoder[0].weight
+        b = self.encoder[0].bias
+
+        #c = self.encoder_lip[0].weight
+        # w = lip_norm(w)
+        self.softplus_ci = torch.tensor(10.0)
+        w = normalization(w, self.softplus_ci)
+
+        y = x@w.T+b
+        x = torch.sin(y)
+
+        for ii in range(1,self.nl):
+            w = self.encoder[ii].weight
+            b = self.encoder[ii].bias
+
+            #c = self.encoder_lip[ii].weight
+            # w = lip_norm(w)
+            w = normalization(w, self.softplus_ci)
+
+            y = x@w.T+b
+            x  = torch.sin(y)
+
+        x = self.encoder[-1](x)
+        return x, coords
+
+
+    @staticmethod
+    def encoder_out_work(self, coords):
         # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
         size = coords.shape[0]
         x0 = coords[:,:self.dim]
@@ -90,66 +154,33 @@ class NN(nn.Module):
     
     # @staticmethod
     # def sym_op(normalized_features, Xp):
-    #     x0 = torch.sin(normalized_features[:Xp.shape[0],:])#.unsqueeze(1)
-    #     x1 = torch.sin(normalized_features[Xp.shape[0]:,:])#.unsqueeze(1)
-    #     #print(x0.shape)
-    #     '''
-    #     xx = torch.cat((x0-x1, x1-x0), dim=1)
-    #     x_0 = torch.logsumexp(self.scale*xx, 1)/self.scale
-    #     x_1 = -torch.logsumexp(-self.scale*xx, 1)/self.scale
-    #     x = x_0#torch.cat((x_0, x_1),1)*64
-    #     '''
-    #     x = (x0-x1)**2#/self.actout(x[:size,32]*x[size:,32]).unsqueeze(1)
-    #     # x = (x0-x1)*torch.tanh((x0-x1))
-    #     #print(x)
-    #     #x = torch.exp(-0.01*torch.sum(x,dim=1).unsqueeze(1))/(math.e)
-
-    #     # w = torch.exp(10*self.autoscale[0].weight)
-
-    #     x = torch.sum(x,dim=1).unsqueeze(1)#/(math.e)
-    #     x = 1*torch.sqrt(x)
+    #     x0 = normalized_features[:Xp.shape[0],:]#.unsqueeze(1)
+    #     x1 = normalized_features[Xp.shape[0]:,:]#.unsqueeze(1)
+    #     x = x0-x1
+    #     x = torch.sqrt((x0-x1)**2+0.00001)
+    #     x = torch.logsumexp(10*x, 1).unsqueeze(1)/10
     #     return x, Xp
 
     @staticmethod
     def sym_op(normalized_features, Xp):
         x0 = normalized_features[:Xp.shape[0],:]#.unsqueeze(1)
         x1 = normalized_features[Xp.shape[0]:,:]#.unsqueeze(1)
-        # #print(x0.shape)
-        # '''
-        # xx = torch.cat((x0-x1, x1-x0), dim=1)
-        # x_0 = torch.logsumexp(self.scale*xx, 1)/self.scale
-        # x_1 = -torch.logsumexp(-self.scale*xx, 1)/self.scale
-        # x = x_0#torch.cat((x_0, x_1),1)*64
-        # '''
-        # x = x0*x1#/self.actout(x[:size,32]*x[size:,32]).unsqueeze(1)
-        # # x = (x0-x1)*torch.tanh((x0-x1))
-        # #print(x)
-        # #x = torch.exp(-0.01*torch.sum(x,dim=1).unsqueeze(1))/(math.e)
 
-        # # w = torch.exp(10*self.autoscale[0].weight)
-
-        # x = torch.sum(x,dim=1).unsqueeze(1)#/(math.e)
-        # x = 0.0002*x
-        # # x = 1*torch.sqrt(x)
-
-        scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1)
+        scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1) 
         x0 = x0/scale0
 
-        scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1)
+        scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1) 
         x1 = x1/scale1
 
         x = x0*x1
 
         x = torch.sum(x,dim=1).unsqueeze(1)
-        # #print(x)
-        # #x = 10*torch.sqrt(1.00001-x)#scale0*scale1
-        #x = 100*torch.sqrt(1.00001-x)/(scale0*scale1)
-        # #x = -0.001*torch.log(x)
-        x = 100*torch.acos(x-0.000001)/(scale0*scale1)
+        x = 50*torch.acos(x-0.000001)/(scale0*scale1)
         return x, Xp
     
     @staticmethod
-    def Loss(self, points, Yobs, beta):
+    def Loss(model, points, Yobs, beta):
+        self = model
         tau, Xp = self.out(points)
         dtau = self.gradient(tau, Xp)
         D = Xp[:,self.dim:]-Xp[:,:self.dim]
@@ -171,7 +202,10 @@ class NN(nn.Module):
         diff = loss0 + loss1
         
         #
-        loss_n = torch.sum(diff*torch.exp(-0.1*tau[:, 0]))/Yobs.shape[0]
+        # loss_n = torch.sum(diff*torch.exp(-0.1*tau[:, 0]))/Yobs.shape[0]
+        # loss_n = torch.sum((loss0 + loss1)*torch.exp(-0.5*tau[:,0]))/Yobs.shape[0]
+        loss_n = torch.sum((loss0 + loss1)*torch.exp(-2.0*tau[:,0]))/Yobs.shape[0]
+
 
         
         loss = beta*loss_n #+ 1e-4*(reg_tau)
