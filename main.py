@@ -8,6 +8,7 @@ import os
 from datetime import datetime, timedelta
 import numpy as np
 import pickle
+import yaml
 import random
 import math 
 from torch.nn import Linear
@@ -84,13 +85,19 @@ def gaussian_2d(xmin, xmax, ymin, ymax, x, y):
     w_y = a * torch.exp(-((y - mu_y) ** 2) / (2 * sd_y ** 2))
     return w_x * w_y
 
-def scale_region(region, coord):
-    # scale the region to -0.5, 0.5
-    xmin, xmax, ymin, ymax = region
-    kx = (xmax - xmin)
+# def scale_region(region, coord):
+#     # scale the region to -0.5, 0.5
+#     xmin, xmax, ymin, ymax = region
+#     kx = (xmax - xmin)
 
 def plot_window_2d_normalized(regions, savepath):
-    xmin, xmax, ymin, ymax = -0.5, 0.5, -0.5, 0.5
+    # xmin, xmax, ymin, ymax = -0.5, 0.5, -0.5, 0.5
+    xmin, xmax, ymin, ymax = -2.5, 2.5, -2.5, 2.5
+    xmin, xmax, ymin, ymax = -10, 10, -10, 10
+    xmin, xmax, ymin, ymax = -3, 3, -3, 3
+
+
+
     n = 100  # resolution of the grid
     x = torch.linspace(xmin, xmax, n)
     y = torch.linspace(ymin, ymax, n)
@@ -107,11 +114,13 @@ def plot_window_2d_normalized(regions, savepath):
     # Calculate the sum of all weights
     total_weights = torch.stack(all_weights).sum(dim=0)
 
-    plt.figure(figsize=(12, 10))
+    # plt.figure(figsize=(12, 10))
+    plt.figure(figsize=(5, 10))
     for i, region in enumerate(regions, 1):
         # Normalize the weights for this region
         normalized_weights = all_weights[i - 1] / total_weights
-        plt.subplot(int(math.sqrt(len(regions))), int(math.sqrt(len(regions))), i)
+        # plt.subplot(int(math.sqrt(len(regions))), int(math.sqrt(len(regions))), i)
+        plt.subplot(3, 3, i)
         cp = plt.contourf(xx.numpy(), yy.numpy(), normalized_weights.numpy(), levels=50, cmap='viridis', vmin=0, vmax=1)
         plt.colorbar(cp, ticks=[0, 1])
         xmin, xmax, ymin, ymax = region
@@ -129,11 +138,13 @@ def plot_window_2d_normalized(regions, savepath):
 SubModel is a subnet of Model. In our example, we want to maintain 4 subnets in Model. Each subnet should encode the input the start and goal depending on some window function. The output of the subnet should be the encoded features(including start and goal) after the window function. But the real output of the model should be the normalized features from all the subnets. Thus, we need to output the weights of the subnets. 
 """
 class SubModel(torch.nn.Module):
-    def __init__(self, dim, region, device):
+    def __init__(self, region, config, device):
         super(SubModel, self).__init__()
-        self.dim = dim
+        self.config = config
+        self.dim = config["data"]["dim"]
         self.device = device 
         self.region = region 
+        self.layer_sizes = config["model"]["layer_sizes"]
         self.B = 0.5*torch.normal(0,1, size=(128,self.dim), device=self.device).T
         # self.b = 10*torch.rand(1, 128)
 
@@ -146,7 +157,7 @@ class SubModel(torch.nn.Module):
         self.to(self.device)
 
     def init_network(self):
-        self.encoder = NN.SubNN.init_network(self.nl, self.input_size, self.h_size)
+        self.encoder = NN.SubNN.init_network(self.layer_sizes, self.input_size)
 
     def input_mapping(self, x):
         w = 2.*np.pi*self.B
@@ -162,28 +173,30 @@ class SubModel(torch.nn.Module):
             m.bias.data.uniform_(-stdv, stdv)
     
     def encoder_out(self, coords):
-        #!: scale the input to -0.5, 0.5
-        #* (x-xmin)*(1/(xmax-xmin)) - 0.5 = x*(1/(xmax-xmin)) - xmin*(1/(xmax-xmin)) - 0.5
-        x_scale = 1 / (self.region[1] - self.region[0])
-        y_scale = 1 / (self.region[3] - self.region[2])
+        if self.config['model']['normalization']:
+            #!: scale the input to -0.5, 0.5
+            #* (x-xmin)*(1/(xmax-xmin)) - 0.5 = x*(1/(xmax-xmin)) - xmin*(1/(xmax-xmin)) - 0.5
+            x_scale = 1 / (self.region[1] - self.region[0])
+            y_scale = 1 / (self.region[3] - self.region[2])
 
-        # Create a scaling matrix
-        scaling_matrix = torch.eye(coords.size(1), device=self.device)  # Identity matrix of appropriate size
-        scaling_matrix[0, 0] = x_scale
-        scaling_matrix[1, 1] = y_scale
-        scaling_matrix[3, 3] = x_scale
-        scaling_matrix[4, 4] = y_scale
+            # Create a scaling matrix
+            scaling_matrix = torch.eye(coords.size(1), device=self.device)  # Identity matrix of appropriate size
+            scaling_matrix[0, 0] = x_scale
+            scaling_matrix[1, 1] = y_scale
+            scaling_matrix[3, 3] = x_scale
+            scaling_matrix[4, 4] = y_scale
 
-        # Create offset vectors
-        offsets = torch.zeros(coords.size(1), device=self.device)
-        offsets[0] = -self.region[0] * x_scale - 0.5
-        offsets[1] = -self.region[2] * y_scale - 0.5
-        offsets[3] = -self.region[0] * x_scale - 0.5
-        offsets[4] = -self.region[2] * y_scale - 0.5
+            # Create offset vectors
+            offsets = torch.zeros(coords.size(1), device=self.device)
+            offsets[0] = -self.region[0] * x_scale - 0.5
+            offsets[1] = -self.region[2] * y_scale - 0.5
+            offsets[3] = -self.region[0] * x_scale - 0.5
+            offsets[4] = -self.region[2] * y_scale - 0.5
 
-        # Perform the dot product and add the offsets
-        scaled_coords = torch.matmul(coords, scaling_matrix) + offsets
-        return NN.SubNN.encoder_out(self, scaled_coords)
+            # Perform the dot product and add the offsets
+            scaled_coords = torch.matmul(coords, scaling_matrix) + offsets
+            coords = scaled_coords
+        return NN.SubNN.encoder_out(self, coords)
     
 
     def out(self, coords):
@@ -202,12 +215,12 @@ class SubModel(torch.nn.Module):
 Model maintains the most original model and feature. We should only care about the new output is composed of the normalized features from all the subnets.
 """
 class Model(torch.nn.Module):
-    def __init__(self, ModelPath, dim, scale_factor, device="cpu"):
+    def __init__(self, ModelPath, config_path, device="cpu"):
         super(Model, self).__init__()
         self.Params = {}
         self.Params['ModelPath'] = ModelPath
-        self.dim = dim
-        self.scale_factor = scale_factor
+
+        # self.scale_factor = scale_factor
         current_time = datetime.utcnow()-timedelta(hours=5)
         self.folder = self.Params['ModelPath']+"/"+current_time.strftime("%m_%d_%H_%M")
         if not os.path.exists(self.folder):
@@ -251,44 +264,38 @@ class Model(torch.nn.Module):
         self.free_pc = []
         self.device = device
 
+
+        # self.initial_view = Tensor([-0.3, -0.2, 0])
+        self.initial_view = Tensor([-1.5, -1.0, 0])
+        self.initial_view = Tensor([-0.0, -0.0, 0])
+        self.initial_view = Tensor([-2.0, -0.0, 0])
+        self.initial_view = Tensor([-1.5, 1.0, 0])
+
+
+                #* Load the configuration file
+        with open(config_path, 'r') as file:
+           self.config = yaml.safe_load(file)
+        self.dim = self.config["data"]["dim"]
+        self.scale_factor = self.config["data"]["scaling"]
+        self.initial_view = Tensor(self.config["model"]["initial_view"])
+
         self.init_network()
+        self.load_rawdata()
+
+
+
+
 
     def init_network(self):
         #! initialize the network, notice that we need to split the original model into submodels
         #? 2D window
-        # xmin, xmax, ymin, ymax
-        self.regions = [
-            (-0.75, 0.25, -0.25, 0.75),   # Top Left
-            (-0.25, 0.75, -0.25, 0.75),    # Top Right
-            (-0.75, 0.25, -0.75, 0.25),  # Bottom Left
-            (-0.25, 0.75, -0.75, 0.25),   # Bottom Right
-        ]
-        # self.regions = [
-        #     (-1, 1, -1, 1),   # for all
-        # ]
-        self.regions = [
-            (-0.625, -0.125, 0.125, 0.625),   # Row one
-            (-0.375, 0.125,  0.125, 0.625),   
-            (-0.125, 0.375,  0.125, 0.625), 
-            (0.125, 0.625,  0.125, 0.625), 
-            (-0.625, -0.125,-0.125, 0.375),   # Row two
-            (-0.375, 0.125, -0.125, 0.375),   
-            (-0.125, 0.375, -0.125, 0.375), 
-            (0.125, 0.625, -0.125, 0.375), 
-            (-0.625, -0.125,-0.375, 0.125),   # Row three
-            (-0.375, 0.125, -0.375, 0.125),   
-            (-0.125, 0.375, -0.375, 0.125), 
-            (0.125, 0.625, -0.375, 0.125), 
-            (-0.625, -0.125,-0.625, -0.125),   # Row four
-            (-0.375, 0.125, -0.625, -0.125),   
-            (-0.125, 0.375, -0.625, -0.125), 
-            (0.125, 0.625, -0.625, -0.125), 
-        ]
-        rows, cols = 2, 2
-        row_s = 1.0 / rows
-        row_s2 = 1.0 / rows / 2
-        x_start = -0.5 - row_s2
-        y_start = 0.5 + row_s2
+        width = 5.0
+        height = 5.0
+        rows, cols = 3, 3
+        row_s = width / rows
+        row_s2 = width / rows / 2
+        x_start = -width/2 - row_s2
+        y_start = width/2 + row_s2
         regions = []
         for ri in range(rows):
             for ci in range(cols):
@@ -299,13 +306,48 @@ class Model(torch.nn.Module):
                 regions.append((x1, x2, y2, y1))
         self.regions = regions
 
-        # plot_window_2d_normalized(self.regions, self.folder)
-        self.subnets = torch.nn.ModuleList([SubModel(self.dim, region, self.device) for region in self.regions])
+        self.regions = [(-5, 5, -15, -5),
+                        (-5, 5, -10, 0),
+                        (-5, 5, -5, 5),
+                        (-5, 5, -0, 10),
+                        (-5, 5, 5, 15),]
+        
+        # self.regions = [(-10.5, 10.5, -10.5, 10.5)]
+        self.regions = [(-5, 5, -5, 5)]
+
+        self.regions = [(-6, 0, 0, 6),
+                        (-3, 3, 0, 6),
+                        (-0, 6, 0, 6),
+                        (-6, 0, -3, 3),
+                        (-3, 3, -3, 3),
+                        (-0, 6, -3, 3),
+                        (-6, 0, -6, 0),
+                        (-3, 3, -6, 0),
+                        (-0, 6, -6, 0),]
+        
+        self.regions = self.config["regions"]
+
+        plot_window_2d_normalized(self.regions, self.folder)
+        
+        self.subnets = torch.nn.ModuleList([SubModel(region, self.config, self.device) for region in self.regions])
 
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.Params['Training']['Learning Rate'], weight_decay=0.2)
 
     def load_rawdata(self):
-        self.explored_data = np.load("data/explored_data.npy")
+        if False:
+            self.explored_data = np.load("data/explored_data.npy")
+            #! hardcode room size
+            self.explored_data[:, :, :6] *= 5.0
+            print("hardcoded room size scale: 5.0")
+        else:
+            # points = np.load("data/cube_passage_points.npy")
+            # speeds = np.load("data/cube_passage_speeds.npy")
+            # points = np.load("data/cabin_points.npy")
+            # speeds = np.load("data/cabin_speeds.npy")
+            points = np.load(self.config["paths"]["pointspath"]).astype(np.float32)
+            speeds = np.load(self.config["paths"]["speedspath"]).astype(np.float32)
+            self.explored_data = np.concatenate((points, speeds), axis=1)
+        print("explored data shape:", self.explored_data.shape)
 
     def randomize_data(self, frame_data):
         prev_frame_idx = torch.randperm(self.frame_idx).tolist()[:self.frame_buffer_size-1]
@@ -355,7 +397,7 @@ class Model(torch.nn.Module):
         return normalized_features, x 
     
     def sym_op(self, normalized_features, Xp):
-        return NN.NN.sym_op(normalized_features, Xp)
+        return NN.NN.sym_op(self, normalized_features, Xp)
 
 
 
@@ -376,11 +418,10 @@ class Model(torch.nn.Module):
         return NN.NN.Loss(self, points, Yobs, beta)
 
     def train(self):
-        self.load_rawdata()
 
         frame_epoch = 50 
         self.alpha = 1.0
-        self.initial_view = Tensor([-0.3, -0.2, 0])
+
         while True:
             if False:
                 #? by frame sequence
@@ -420,7 +461,7 @@ class Model(torch.nn.Module):
             filepath, map_location=torch.device(self.Params['Device']))
         Bs = checkpoint['B_state_dicts']
 
-        self.subnets = torch.nn.ModuleList([SubModel(self.dim, region, self.device) for region in self.regions])
+        self.subnets = torch.nn.ModuleList([SubModel(region, self.config, self.device) for region in self.regions])
         for i, subnet in enumerate(self.subnets):
             subnet.B = Bs[i]
 
@@ -603,9 +644,26 @@ class Model(torch.nn.Module):
         return outputs
 
     def plot(self, src, epoch, total_train_loss, alpha, cur_points=None, camera_matrix=None, traj_list = None):
-        limit = 1
-        xmin = [-0.5, -0.5]
-        xmax = [0.5, 0.5]
+        # limit = 1
+        # xmin = [-0.5, -0.5]
+        # xmax = [0.5, 0.5]
+
+        # limit = 5
+        # xmin = [-2.5, -2.5]
+        # xmax = [2.5, 2.5]
+
+        # limit = 20
+        # xmin = [-10, -10]
+        # xmax = [10, 10]
+
+        # limit = 6
+        # xmin = [-3, -3]
+        # xmax = [3, 3]
+        offsetxyz = self.config['data']['offset']
+        xmin = [-offsetxyz[0], -offsetxyz[1]]
+        xmax = [offsetxyz[0], offsetxyz[1]]
+        limit = max(offsetxyz[0], offsetxyz[1])*2
+        
         # if self.mode == READ_FROM_TURTLEBOT:
         #     xmin = [-1.5, -1.5]
         #     xmax = [1.5, 1.5]
@@ -681,7 +739,9 @@ class Model(torch.nn.Module):
         #     ax.plot(self.trajectory[:, 0], self.trajectory[:, 1], color='red', marker='o', markersize=0.8, linestyle='-', linewidth=1)
             
 
-        ax.contour(X,Y,TT,np.arange(0,5,0.01), cmap='bone', linewidths=0.3)#0.25
+        # ax.contour(X,Y,TT,np.arange(0,5,0.01), cmap='bone', linewidths=0.3)#0.25
+        ax.contour(X,Y,TT,np.arange(0,30,0.02), cmap='bone', linewidths=0.3)#0.25
+
         plt.colorbar(quad1,ax=ax, pad=0.1, label='Predicted Velocity')
         plt.savefig(self.folder+"/plots"+str(epoch)+"_"+str(alpha)+"_"+str(round(total_train_loss,4))+"_0.png",bbox_inches='tight')
 
@@ -717,7 +777,7 @@ class Model(torch.nn.Module):
                 # change nan to 0
                 # weighted_output = torch.where(torch.isnan(weighted_output), torch.zeros_like(weighted_output), weighted_output) 
 
-                plt.subplot(int(math.sqrt(len(self.regions))), int(math.sqrt(len(self.regions))), i)
+                plt.subplot(3, 3, i)
                 plt.gca().set_aspect('equal', adjustable='box')
                 quad1 = plt.pcolormesh(X, Y, weighted_output.numpy(), vmin=0, vmax=1)
                 plt.colorbar(quad1, pad=0.1, label=f'Subnet Output {i}')
@@ -734,7 +794,9 @@ def main():
     # torch.cuda.memory._record_memory_history(enabled=True)
     modelPath = './Experiments'
     scale_factor = 10
-    model    = Model(modelPath, 3, scale_factor, device='cuda:0')
+    config_path = "configs/cabin.yaml"
+    config_path = "configs/ruiqi.yaml"
+    model    = Model(modelPath, config_path, device='cuda:0')
     model.train()
 
 def eval():

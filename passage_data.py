@@ -1,0 +1,237 @@
+import numpy as np 
+import torch
+import igl
+import matplotlib.pyplot as plt
+import yaml
+
+def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None, scale=1.0):
+    #! visualize the mesh
+    import trimesh
+    if True:
+        scene = trimesh.Scene()
+
+        if meshpath:
+            mesh = trimesh.load(meshpath)
+            matrix = np.eye(4)
+            matrix[:3, :3] *= scale
+
+            mesh.apply_transform(matrix)
+            mesh.visual.face_colors = [200, 192, 207, 255]
+            scene.add_geometry([mesh])
+
+        # Define line segments for X (red), Y (green), and Z (blue) axes
+        axis_length = 1.0
+        x_axis = trimesh.load_path(np.array([[0, 0, 0], [axis_length, 0, 0]]))
+        y_axis = trimesh.load_path(np.array([[0, 0, 0], [0, axis_length, 0]]))
+        z_axis = trimesh.load_path(np.array([[0, 0, 0], [0, 0, axis_length]]))
+        x_axis.colors = [[255, 0, 0, 255]]
+        y_axis.colors = [[0, 255, 0, 255]]
+        z_axis.colors = [[0, 0, 255, 255]]
+        scene.add_geometry([ x_axis, y_axis, z_axis])
+
+        # Define camera positions
+        if camera_positions is not None:
+            cm_pc = trimesh.PointCloud(np.array(camera_positions), colors=[[255, 0, 0, 255]])
+            scene.add_geometry([cm_pc])
+
+        # Define a plane
+        height = 0.3
+        size = 7
+        center = np.array([-5, 0, height])
+        plane_vertices =[
+            center + np.array([-size, -size, 0]),
+            center + np.array([size, -size, 0]),
+            center + np.array([size, size, 0]),
+            center + np.array([-size, size, 0])
+        ]
+        plane_faces = [
+            [0, 1, 2],
+            [0, 2, 3],
+            [0, 3, 2],
+            [0, 2, 1]
+        ]
+        plane_mesh = trimesh.Trimesh(plane_vertices, plane_faces, process=False)
+        plane_mesh.visual.face_colors = [100, 100, 255, 100]
+
+        # add points cloud
+        if True:
+            if points is not None and (speeds is not None):
+                start_points = points[:,:3]
+                start_speeds = speeds[:, 0]
+                # start_colors = (np.outer(1.0 - start_speeds, [255, 0, 0, 50]) + 
+                #     np.outer(start_speeds, [255, 255, 255, 50])).astype(np.uint8)
+                colormap = plt.get_cmap('viridis')
+                start_colors = colormap(start_speeds)
+
+                end_points = points[:,3:6]
+                end_speeds = speeds[:, 1]
+                colormap = plt.get_cmap('viridis')
+                end_colors = colormap(end_speeds)
+                # end_colors = (np.outer(1.0 - end_speeds, [255, 0, 0, 80]) + 
+                #     np.outer(end_speeds, [255, 255, 255, 80])).astype(np.uint8)
+
+                point_cloud = trimesh.PointCloud(start_points, start_colors)
+                # point_cloud = trimesh.PointCloud(end_points, end_colors)
+                scene.add_geometry([point_cloud])
+        
+
+        if lidar_points is not None:
+            points = lidar_points
+            point_cloud = trimesh.PointCloud(points, colors=[255, 0, 0, 255])
+
+            scene.add_geometry([ x_axis, y_axis, z_axis, point_cloud])
+
+
+        scene.show()
+
+def unsigned_distance_without_bvh(triangles, query_points):
+    # Assuming your tensors are called triangles and query_points
+    triangles_np = triangles
+    query_points_np = query_points
+
+    # Flatten and get unique vertices
+    vertices, inverse_indices = np.unique(triangles_np, axis=0, return_inverse=True)
+
+    # Convert back the inverse indices to get faces
+    faces = inverse_indices.reshape(-1, 3)
+
+
+    # Compute the squared distance (Note: to get the actual distance, take the sqrt of the results)
+    squared_d, closest_faces, closest_points = igl.point_mesh_squared_distance(query_points_np, vertices, faces)
+
+    # distances would be the sqrt of squared_d
+    unsigned_distance = np.sqrt(squared_d)
+
+    return unsigned_distance
+
+def uniform_gt_pts_speeds(center, offsetxyz, meshpath="datasets/isdf-seqs/mesh.obj", minimum=0.07, maximum=0.3, num=10000, scale=1.0):
+    random_offsets = 2*torch.rand(num*10, 3)-1
+    random_offsets[:,0] = random_offsets[:,0]*offsetxyz[0]+center[0]
+    random_offsets[:,1] = random_offsets[:,1]*offsetxyz[1]+center[1]
+    random_offsets[:,2] = random_offsets[:,2]*offsetxyz[2]+center[2]
+    pc0 = random_offsets
+
+    dP = torch.rand((num*10, 3))-0.5
+    rL = (torch.rand(num*10, 3))
+    rL[:,0] = rL[:,0]*offsetxyz[0]
+    rL[:,1] = rL[:,1]*offsetxyz[1]
+    rL[:,2] = rL[:,2]*offsetxyz[2]
+    pc1 = pc0 + torch.nn.functional.normalize(dP, dim=1) * rL
+
+    PointsInside = torch.all((pc1 <= offsetxyz[0]), dim=1) & torch.all((pc1 >= -offsetxyz[0]), dim=1)
+    PointsInsidex = (pc1[:,0] <= center[0]+offsetxyz[0]) & (pc1[:,0] >= center[0]-offsetxyz[0])
+    PointsInsidey = (pc1[:,1] <= center[1]+offsetxyz[1]) & (pc1[:,1] >= center[1]-offsetxyz[1])
+    PointsInsidez = (pc1[:,2] <= center[2]+offsetxyz[2]) & (pc1[:,2] >= center[2]-offsetxyz[2])
+    PointsInside = PointsInsidex & PointsInsidey & PointsInsidez
+    #! only for cube_passage
+    # PointsInside = PointsInside & (torch.any(abs(pc0) > 1.0, dim=1) & torch.any(abs(pc1) > 1.0, dim=1))
+    pc0 = pc0[PointsInside]
+    pc1 = pc1[PointsInside]
+
+    v, f = igl.read_triangle_mesh(meshpath)
+    v *= scale
+    t_obs = v[f].reshape(-1, 3)
+
+    device = pc0.device
+    x0 = pc0.cpu().numpy()
+    y0 = unsigned_distance_without_bvh(t_obs, x0)
+    y0 = torch.from_numpy(y0).float().to(device).unsqueeze(1)
+    # bounds to speeds
+    # speeds = torch.clip(bounds, minimum, maximum)/maximum
+    y0 = torch.clip(y0, minimum, maximum)/maximum
+
+    valid_indices = torch.where((y0 < 1) & (y0 > 0))[0]
+    if num <= len(valid_indices):
+        # Select without replacement if num is less than or equal to the size of valid_indices
+        start_indices = valid_indices[torch.randperm(len(valid_indices))[:num]]
+    else:
+        # Select with replacement if num is greater than the size of valid_indices
+        rand_indices = torch.randint(0, len(valid_indices), (num,))
+        start_indices = valid_indices[rand_indices]
+
+    x1 = pc1[start_indices].cpu().numpy()
+    y1 = unsigned_distance_without_bvh(t_obs, x1)
+    y1 = torch.from_numpy(y1).float().to(device).unsqueeze(1)
+    # y1 = torch.clip((y1 - minimum) / (maximum - minimum), 0, 1)
+    y1 = torch.clip(y1, minimum, maximum)/maximum
+
+    x0 = pc0[start_indices]
+    x1 = pc1[start_indices]
+    x = torch.cat((x0, x1), dim=1)
+    y = torch.cat((y0[start_indices], y1), dim=1)
+
+    # import matplotlib.pyplot as plt
+    # plt.scatter(all_bounds, all_speeds)
+    # plt.xlabel("ground truth distance")
+    # plt.ylabel("speed")
+    # plt.show()
+    # temp = speeds[start_indices]
+    # plt.hist(temp.cpu().numpy(), bins=100)
+    # plt.title("speed distribution")
+    # plt.show()
+    return x, y
+
+
+if __name__ == '__main__':
+    import sys
+    import yaml
+    # # meshpath = "mesh_scaled_11_29_15.obj"
+    # meshpath = "data/passage2.obj"
+    # meshpath = "data/cube_passage.obj"
+    # meshpath = "data/cabin_mesh.obj"
+    # sample_number = 200000
+    # dim = 3
+    # # sample_speed(sys.argv[1], int(sys.argv[2]), int(sys.argv[3]))
+    # # points, speeds = my_sample_speed(meshpath, sample_number, dim)
+    # center = np.array([0, 0, 0])
+    # offset = np.array([2.0, 10.0, 2.0])
+    # offset = np.array([3.0, 3.0, 3.0]) 
+    # offset = np.array([1.0, 1.0, 1.0]) 
+    # minimum = 0.008
+    # maximum = 0.08
+
+    #! load configs
+    config_path = "configs/cabin.yaml"
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
+    center = np.array(config["data"]["center"])
+    offset = np.array(config["data"]["offset"])
+    dim = config["data"]["dim"]
+    minimum = config["data"]["minimum"]
+    maximum = config["data"]["maximum"]
+    sample_number = config["data"]["sample_num"]
+    scale = config["data"]["scaling"]
+    meshpath = config["paths"]["meshpath"]
+    pointspath = config["paths"]["pointspath"]
+    speedspath = config["paths"]["speedspath"]
+    
+
+    if True:
+        explored_data = np.load("data/explored_data.npy")
+        #! hardcode room size
+        explored_data[:, :, :6] *= 5.0
+        print("hardcoded room size scale: 5.0")
+    else:
+        points = np.load("data/passage_points.npy")
+        speeds = np.load("data/passage_speeds.npy")
+        explored_data = np.concatenate((points, speeds), axis=1)
+        explored_data = explored_data.reshape(-1, 2000, 8)
+        explored_data[:, :, :6] *= 1/5.0
+    explored_data = explored_data.reshape(-1, 8)
+    points = explored_data[:, :6]
+    speeds = explored_data[:, 6:]
+    points, speeds = uniform_gt_pts_speeds(center, offset, meshpath, minimum, maximum, sample_number, scale=scale)
+    if True:
+        # meshpath = None
+        viz(points, speeds, meshpath=meshpath, scale=scale)
+        print()
+
+    if True:
+        # np.save("data/passage_points.npy", points)
+        # np.save("data/passage_speeds.npy", speeds)
+        # np.save("data/cube_passage_points.npy", points)
+        # np.save("data/cube_passage_speeds.npy", speeds)
+        # np.save("data/cabin_points_05.npy", points)
+        # np.save("data/cabin_speeds_05.npy", speeds)
+        np.save(pointspath, points)
+        np.save(speedspath, speeds)

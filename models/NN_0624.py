@@ -48,14 +48,14 @@ class SubNN(nn.Module):
     #     return encoder, encoder1
     
     @staticmethod
-    def init_network(nl, input_size, h_size):
+    def init_network(layer_sizes, input_size):
         encoder = torch.nn.ModuleList()
-        encoder.append(Linear(2*input_size, h_size))
-        layer_sizes = [64, 64, 64, 64, 128]
+        # layer_sizes = [64, 64, 64, 64, 256]
+        encoder.append(Linear(2*input_size, layer_sizes[0]))
 
-        for i in range(nl):
-            encoder.append(Linear(h_size, h_size))
-        encoder.append(Linear(h_size, 256))
+        for i in range(0, len(layer_sizes)-1):
+            encoder.append(Linear(layer_sizes[i], layer_sizes[i+1]))
+        # encoder.append(Linear(h_size, 256))
         return encoder
     
 
@@ -63,33 +63,40 @@ class SubNN(nn.Module):
     @staticmethod
     def encoder_out(self, coords):
         # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
-        size = coords.shape[0]
+        use_lip = self.config['model']['use_lipschitz']
         x0 = coords[:,:self.dim]
         x1 = coords[:,self.dim:]
-        
         x = torch.vstack((x0,x1))
-        
         x = self.input_mapping(x)
-        w = self.encoder[0].weight
-        b = self.encoder[0].bias
 
-        #c = self.encoder_lip[0].weight
-        w = lip_norm(w)
+        if use_lip:
+            w = self.encoder[0].weight
+            b = self.encoder[0].bias
 
-        y = x@w.T+b
-        x = torch.sin(2*y)
-
-        for ii in range(1,self.nl):
-            w = self.encoder[ii].weight
-            b = self.encoder[ii].bias
-
-            #c = self.encoder_lip[ii].weight
+            #c = self.encoder_lip[0].weight
             w = lip_norm(w)
 
             y = x@w.T+b
-            x  = torch.sin(2*y)
+            x = torch.sin(2*y)
 
-        # x = self.encoder[-1](x)
+            for ii in range(1,self.nl+1):
+                w = self.encoder[ii].weight
+                b = self.encoder[ii].bias
+
+                #c = self.encoder_lip[ii].weight
+                w = lip_norm(w)
+
+                y = x@w.T+b
+                x  = torch.sin(2*y)
+
+            # x = self.encoder[-1](x)
+        else:
+            x = torch.sin(self.encoder[0](x))
+
+            for ii in range(1,self.nl):
+                x = torch.sin(self.encoder[ii](x))
+
+            x = self.encoder[-1](x)
         return x, coords
 
     @staticmethod
@@ -129,7 +136,7 @@ class SubNN(nn.Module):
 
 
     @staticmethod
-    def encoder_out_work(self, coords):
+    def encoder_out_origin(self, coords):
         # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
         size = coords.shape[0]
         x0 = coords[:,:self.dim]
@@ -141,7 +148,7 @@ class SubNN(nn.Module):
         x = torch.sin(self.encoder[0](x))
 
         for ii in range(1,self.nl):
-            x = torch.sin(self.encoder1[ii](x))
+            x = torch.sin(self.encoder[ii](x))
 
         x = self.encoder[-1](x)
         return x, coords
@@ -162,7 +169,7 @@ class NN(nn.Module):
     #     return x, Xp
 
     @staticmethod
-    def sym_op(normalized_features, Xp):
+    def sym_op(model, normalized_features, Xp):
         x0 = normalized_features[:Xp.shape[0],:]#.unsqueeze(1)
         x1 = normalized_features[Xp.shape[0]:,:]#.unsqueeze(1)
 
@@ -175,7 +182,14 @@ class NN(nn.Module):
         x = x0*x1
 
         x = torch.sum(x,dim=1).unsqueeze(1)
-        x = 50*torch.acos(x-0.000001)/(scale0*scale1)
+        if model.config['model']['sym_div'] == True:
+            sym_div_hype = model.config['model']['sym_div_hype']
+            x = sym_div_hype * torch.acos(x-0.000001)/(scale0*scale1)
+        else:
+            sym_mult_hype = model.config['model']['sym_mult_hype']
+            x = torch.acos(x-0.000001)*(scale0*scale1)/sym_mult_hype
+        # x = 1000*torch.acos(x-0.000001)/(scale0*scale1) #250
+        # x = torch.acos(x-0.000001)*(scale0*scale1)/50 #250
         return x, Xp
     
     @staticmethod
@@ -204,7 +218,10 @@ class NN(nn.Module):
         #
         # loss_n = torch.sum(diff*torch.exp(-0.1*tau[:, 0]))/Yobs.shape[0]
         # loss_n = torch.sum((loss0 + loss1)*torch.exp(-0.5*tau[:,0]))/Yobs.shape[0]
-        loss_n = torch.sum((loss0 + loss1)*torch.exp(-2.0*tau[:,0]))/Yobs.shape[0]
+        # loss_n = torch.sum((loss0 + loss1)*torch.exp(-2.0*tau[:,0]))/Yobs.shape[0]
+        loss_n_hype = model.config['model']['loss_n_hype']
+        loss_n = torch.sum((loss0 + loss1)*torch.exp(loss_n_hype*tau[:,0]))/Yobs.shape[0] #-0.4
+        # loss_n = torch.sum((loss0+loss1))
 
 
         

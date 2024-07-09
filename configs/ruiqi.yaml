@@ -1,0 +1,38 @@
+model:
+  initial_view: [-0.0, -0.2, -0.1]
+  normalization: False
+  use_lipschitz: True
+  loss_n_hype: -0.5
+  sym_div: True # whether to divide scale
+  sym_div_hype: 100
+  sym_mult_hype: 50
+  layer_sizes: [64, 64, 64, 64, 256]
+
+# regions:
+#   - [-1, 1, -1, 1]
+
+regions:
+  - [-1, 0, 0, 1]
+  - [-0.5, 0.5, 0, 1]
+  - [0, 1, 0, 1]
+  - [-1, 0, -0.5, 0.5]
+  - [-0.5, 0.5, -0.5, 0.5]
+  - [0, 1, -0.5, 0.5]
+  - [-1, 0, -1, 0]
+  - [-0.5, 0.5, -1, 0]
+  - [0, 1, -1, 0]
+
+
+data:
+  center: [0, 0, 0]
+  offset: [0.5, 0.5, 0.5]
+  dim: 3
+  scaling: 6.0
+  minimum: 0.01
+  maximum: 0.1
+  sample_num: 200000
+
+paths:
+  meshpath: './data/cabin_mesh.obj'
+  pointspath: './data/ruiqi_points.npy'
+  speedspath: './data/ruiqi_speeds.npy'
