@@ -83,6 +83,9 @@ def gaussian_2d(xmin, xmax, ymin, ymax, x, y):
 
     w_x = a * torch.exp(-((x - mu_x) ** 2) / (2 * sd_x ** 2))
     w_y = a * torch.exp(-((y - mu_y) ** 2) / (2 * sd_y ** 2))
+
+    w_x = torch.where((x>=xmin) & (x<=xmax), w_x, torch.tensor(0.00, device=x.device))
+    w_y = torch.where((y>=ymin) & (y<=ymax), w_y, torch.tensor(0.00, device=y.device))
     return w_x * w_y
 
 # def scale_region(region, coord):
@@ -346,6 +349,12 @@ class Model(torch.nn.Module):
             # speeds = np.load("data/cabin_speeds.npy")
             points = np.load(self.config["paths"]["pointspath"]).astype(np.float32)
             speeds = np.load(self.config["paths"]["speedspath"]).astype(np.float32)
+            # invalid_indices_0 = (points[:, 0] > -1.0) & (points[:, 0] < 1.0) | (points[:, 1] > 0.0)
+            # invalid_indices_1 = (points[:, 3] > -1.0) & (points[:, 3] < 1.0) | (points[:, 4] > 0.0)
+            # invalid_indices = np.logical_or(invalid_indices_0, invalid_indices_1)
+
+            # points = points[~invalid_indices]
+            # speeds = speeds[~invalid_indices] 
             self.explored_data = np.concatenate((points, speeds), axis=1)
         print("explored data shape:", self.explored_data.shape)
 
@@ -610,6 +619,51 @@ class Model(torch.nn.Module):
             output, _ = self.sym_op(subnet_feature, x)
             subnet_outputs.append(output)
         return subnet_outputs  
+    
+    def plot_out_valid(self, x, valid_indices):
+        x = x.clone().detach().requires_grad_(True)
+        features = []
+        windows = []
+        for i, subnet in enumerate(self.subnets):
+            feature, window = subnet.out(x)
+            features.append(feature)
+            windows.append(window)
+        windows = torch.stack(windows, dim=0)
+        ws  = torch.sum(windows, dim=0)
+        features = torch.stack(features, dim=0)
+        valid_features = []
+        for indice in valid_indices:
+            raw_encoder = features[indice]
+            subnet_feature =  raw_encoder * windows[indice]
+            valid_features.append(subnet_feature)
+        valid_feature = torch.sum(torch.stack(valid_features), dim=0)
+        normalized_feature = valid_feature / ws
+        output, _ = self.sym_op(normalized_feature, x)
+        return output, x
+ 
+
+    def plot_out_end_valid(self, x, valid_indices):
+        #TODO: only filter the end points
+        x = x.clone().detach().requires_grad_(True)
+        features = []
+        windows = []
+        for i, subnet in enumerate(self.subnets):
+            feature, window = subnet.out(x)
+            features.append(feature)
+            windows.append(window)
+        windows = torch.stack(windows, dim=0)
+        ws  = torch.sum(windows, dim=0)
+        features = torch.stack(features, dim=0)
+        normalized_features = []
+        for indice in valid_indices:
+            raw_encoder = features[indice]
+            subnet_feature =  raw_encoder * windows[i] / ws
+            normalized_features.append(subnet_feature)
+        normalized_feature = torch.sum(torch.stack(normalized_features), dim=0)
+        output, _ = self.sym_op(normalized_feature, x)
+        return output, x
+
+
 
     def plot_end_out(self, x):
         x = x.clone().detach().requires_grad_(False)
@@ -642,6 +696,8 @@ class Model(torch.nn.Module):
             output, _ = self.sym_op(feature, x)
             outputs.append(output)
         return outputs
+
+
 
     def plot(self, src, epoch, total_train_loss, alpha, cur_points=None, camera_matrix=None, traj_list = None):
         # limit = 1
@@ -740,7 +796,8 @@ class Model(torch.nn.Module):
             
 
         # ax.contour(X,Y,TT,np.arange(0,5,0.01), cmap='bone', linewidths=0.3)#0.25
-        ax.contour(X,Y,TT,np.arange(0,30,0.02), cmap='bone', linewidths=0.3)#0.25
+        contour_density = self.config["model"]["contour_density"]
+        ax.contour(X,Y,TT,np.arange(0,30,contour_density), cmap='bone', linewidths=0.3)#0.25
 
         plt.colorbar(quad1,ax=ax, pad=0.1, label='Predicted Velocity')
         plt.savefig(self.folder+"/plots"+str(epoch)+"_"+str(alpha)+"_"+str(round(total_train_loss,4))+"_0.png",bbox_inches='tight')
@@ -787,36 +844,86 @@ class Model(torch.nn.Module):
             plt.close()
 
 
+    def plot_valid(self, src, valid_indices):
+        offsetxyz = self.config['data']['offset']
+        xmin = [-offsetxyz[0], -offsetxyz[1]]
+        xmax = [offsetxyz[0], offsetxyz[1]]
+        limit = max(offsetxyz[0], offsetxyz[1])*2
+        
+        spacing=limit/80.0
+        X,Y      = np.meshgrid(np.arange(xmin[0],xmax[0],spacing),np.arange(xmin[1],xmax[1],spacing))
+
+        Xsrc = src 
+
+        
+        XP       = np.zeros((len(X.flatten()),2*self.dim))#*((xmax[dims_n]-xmin[dims_n])/2 +xmin[dims_n])
+        XP[:,:self.dim] = Xsrc
+        XP[:,self.dim:] = Xsrc
+        #XP=XP/scale
+        XP[:,self.dim+0]  = X.flatten()
+        XP[:,self.dim+1]  = Y.flatten() #! this allow to change from y to z
+        XP = Variable(Tensor(XP)).to(self.Params['Device'])
+        
+        #! hardcode travel time and speed based on the region
+        tau, Xp = self.plot_out_valid(XP, valid_indices)
+        tt = tau[:, 0]
+        dtau = self.gradient(tau, Xp)
+        DT1 = dtau[:, self.dim:]
+        S1 = torch.einsum('ij,ij->i', DT1, DT1)
+        ss = 1/torch.sqrt(S1)
+        
+        TT = tt.to('cpu').data.numpy().reshape(X.shape)
+        V  = ss.to('cpu').data.numpy().reshape(X.shape)
+
+        fig = plt.figure()
+
+        ax = fig.add_subplot(111)
+        quad1 = ax.pcolormesh(X,Y,V,vmin=0,vmax=1)
+
+        contour_density = self.config["model"]["contour_density"]
+        ax.contour(X,Y,TT,np.arange(0,30,contour_density), cmap='bone', linewidths=0.3)#0.25
+
+        plt.colorbar(quad1,ax=ax, pad=0.1, label='Predicted Velocity')
+        plt.savefig(self.folder+"/plots_valid"+"_0.png",bbox_inches='tight')
+
+        plt.close(fig)
+
+
 
 
 
 def main():
     # torch.cuda.memory._record_memory_history(enabled=True)
     modelPath = './Experiments'
-    scale_factor = 10
     config_path = "configs/cabin.yaml"
     config_path = "configs/ruiqi.yaml"
+    config_path = "configs/cube_passage.yaml"
     model    = Model(modelPath, config_path, device='cuda:0')
     model.train()
 
 def eval():
     modelPath = './Experiments'
-    scale_factor = 10
-    model    = Model(modelPath, 3, scale_factor, device='cuda:0')
-    modelpath = "Experiments/06_27_10_55/Model_Epoch_02200_ValLoss_2.624636e-02.pt"
+    config_path = "configs/cube_passage.yaml"
+    modelpath = "Experiments/07_09_14_02/Model_Epoch_01500_ValLoss_7.895163e-04.pt"
+
+    model    = Model(modelPath, config_path, device='cuda:0')
     model.load(modelpath)
-    model.plot( Tensor([-0.3, -0.2, 0]), 0, 0, 0, None, None, None)
-    t = torch.tensor([[-0.3, -0.2, 0, -0.3, -0.2, 0],
-                      [-0.3, 0.2, 0, -0.3, 0.2, 0],
-                      [0.3, 0, 0, 0.3, 0, 0],
-                      [0.3, 0.35, 0, 0.3, 0.35, 0],
-                      [-0.3, -0.35, 0, -0.3, -0.35, 0],
-                      [-0.1, -0.3, 0, -0.1, -0.3, 0],]).to('cuda:0')
-    features, _ = model.all_encode_out(t)
-    start_features = features[:6]
-    scales = torch.sqrt(torch.sum (  ( start_features**2 ) , dim =1)).unsqueeze(1) 
-    print(scales)
-    print("done")
+    model.plot( Tensor([-2.0, -0.0, 0]), 0, 0, 0, None, None, None)
+    model.plot_valid( Tensor([-2.0, -0.0, 0]), [ 0, 2, 3,  5, 6, 7, 8])
+    
+    
+    # t = torch.tensor([[-0.3, -0.2, 0, -0.3, -0.2, 0],
+    #                   [-0.3, 0.2, 0, -0.3, 0.2, 0],
+    #                   [0.3, 0, 0, 0.3, 0, 0],
+    #                   [0.3, 0.35, 0, 0.3, 0.35, 0],
+    #                   [-0.3, -0.35, 0, -0.3, -0.35, 0],
+    #                   [-0.1, -0.3, 0, -0.1, -0.3, 0],]).to('cuda:0')
+    # model.plot_out_valid(t, [0, 1, 2, 3, 4, 5, 6, 7])
+    # features, _ = model.all_encode_out(t)
+    # start_features = features[:6]
+    # scales = torch.sqrt(torch.sum (  ( start_features**2 ) , dim =1)).unsqueeze(1) 
+    # print(scales)
+    # print("done")
 
 
 

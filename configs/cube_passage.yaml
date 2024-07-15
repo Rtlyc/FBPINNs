@@ -1,0 +1,45 @@
+model:
+  initial_view: [-2.0, -0.0, -0.0]
+  normalization: True
+  use_lipschitz: True
+  loss_n_hype: -0.5
+  sym_div: True # whether to divide scale
+  sym_div_hype: 50
+  sym_mult_hype: 50
+  layer_sizes: [64, 64, 64, 64, 256]
+  contour_density: 0.1
+
+# regions:
+#   - [-6, 0, 0, 6]
+#   - [-3, 3, 0, 6]
+#   - [0, 6, 0, 6]
+#   - [-6, 0, -3, 3]
+#   - [-3, 3, -3, 3]
+#   - [0, 6, -3, 3]
+#   - [-6, 0, -6, 0]
+#   - [-3, 3, -6, 0]
+#   - [0, 6, -6, 0]
+
+regions:
+  - [-7, -1, 0, 6]
+  - [1, 7, 0, 6]
+  - [-7, -1, -3, 3]
+  - [1, 7, -3, 3]
+  - [-7, -1, -6, 0]
+  - [-3, 3, -6, 0]
+  - [1, 7, -6, 0]
+
+
+data:
+  center: [0, 0, 0]
+  offset: [3, 3, 3]
+  dim: 3
+  scaling: 1.0
+  minimum: 0.1
+  maximum: 1.0
+  sample_num: 200000
+
+paths:
+  meshpath: './data/cube_passage.obj'
+  pointspath: './data/cube_passage_empty_points.npy'
+  speedspath: './data/cube_passage_empty_speeds.npy'

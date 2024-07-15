@@ -7,6 +7,7 @@ model:
   sym_div_hype: 500
   sym_mult_hype: 50
   layer_sizes: [64, 64, 64, 64, 256]
+  contour_density: 0.1
 
 regions:
   - [-6, 0, 0, 6]

@@ -266,8 +266,8 @@ class NN(nn.Module):
         # dtau
         dtau = self.gradient(tau, Xp)
         # (s-g)
-        D = Xp[:,self.dim:]-Xp[:,:self.dim]
-        D_norm = torch.sqrt(torch.einsum('ij,ij->i', D, D))
+        # D = Xp[:,self.dim:]-Xp[:,:self.dim]
+        # D_norm = torch.sqrt(torch.einsum('ij,ij->i', D, D))
 
         DT1 = dtau[:,self.dim:]
         S1 = torch.einsum('ij,ij->i', DT1, DT1)

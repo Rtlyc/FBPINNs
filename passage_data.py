@@ -124,7 +124,12 @@ def uniform_gt_pts_speeds(center, offsetxyz, meshpath="datasets/isdf-seqs/mesh.o
     PointsInsidez = (pc1[:,2] <= center[2]+offsetxyz[2]) & (pc1[:,2] >= center[2]-offsetxyz[2])
     PointsInside = PointsInsidex & PointsInsidey & PointsInsidez
     #! only for cube_passage
-    # PointsInside = PointsInside & (torch.any(abs(pc0) > 1.0, dim=1) & torch.any(abs(pc1) > 1.0, dim=1))
+    if True:
+        # PointsInside = PointsInside & (torch.any(abs(pc0) > 1.0, dim=1) & torch.any(abs(pc1) > 1.0, dim=1))
+        invalid_indices_0 = (pc0[:,0]>-1) & (pc0[:,0]<1.0) & (pc0[:,1]>0.0)
+        invalid_indices_1 = (pc1[:,0]>-1) & (pc1[:,0]<1.0) & (pc1[:,1]>0.0)
+        invalid_indices = invalid_indices_0 | invalid_indices_1
+        PointsInside = PointsInside & ~invalid_indices
     pc0 = pc0[PointsInside]
     pc1 = pc1[PointsInside]
 
@@ -192,6 +197,7 @@ if __name__ == '__main__':
 
     #! load configs
     config_path = "configs/cabin.yaml"
+    config_path = "configs/cube_passage.yaml"
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
     center = np.array(config["data"]["center"])
@@ -222,7 +228,7 @@ if __name__ == '__main__':
     speeds = explored_data[:, 6:]
     points, speeds = uniform_gt_pts_speeds(center, offset, meshpath, minimum, maximum, sample_number, scale=scale)
     if True:
-        # meshpath = None
+        meshpath = None
         viz(points, speeds, meshpath=meshpath, scale=scale)
         print()
 
