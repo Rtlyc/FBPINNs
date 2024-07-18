@@ -71,7 +71,7 @@ def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None,
                 #     np.outer(end_speeds, [255, 255, 255, 80])).astype(np.uint8)
 
                 point_cloud = trimesh.PointCloud(start_points, start_colors)
-                # point_cloud = trimesh.PointCloud(end_points, end_colors)
+                point_cloud = trimesh.PointCloud(end_points, end_colors)
                 scene.add_geometry([point_cloud])
         
 
@@ -104,7 +104,7 @@ def unsigned_distance_without_bvh(triangles, query_points):
 
     return unsigned_distance
 
-def uniform_gt_pts_speeds(center, offsetxyz, meshpath="datasets/isdf-seqs/mesh.obj", minimum=0.07, maximum=0.3, num=10000, scale=1.0):
+def uniform_gt_pts_speeds(center, offsetxyz, meshpath=None, minimum=0.07, maximum=0.3, num=10000, scale=1.0, region=None):
     random_offsets = 2*torch.rand(num*10, 3)-1
     random_offsets[:,0] = random_offsets[:,0]*offsetxyz[0]+center[0]
     random_offsets[:,1] = random_offsets[:,1]*offsetxyz[1]+center[1]
@@ -124,12 +124,16 @@ def uniform_gt_pts_speeds(center, offsetxyz, meshpath="datasets/isdf-seqs/mesh.o
     PointsInsidez = (pc1[:,2] <= center[2]+offsetxyz[2]) & (pc1[:,2] >= center[2]-offsetxyz[2])
     PointsInside = PointsInsidex & PointsInsidey & PointsInsidez
     #! only for cube_passage
-    if True:
+    if False:
         # PointsInside = PointsInside & (torch.any(abs(pc0) > 1.0, dim=1) & torch.any(abs(pc1) > 1.0, dim=1))
-        invalid_indices_0 = (pc0[:,0]>-1) & (pc0[:,0]<1.0) & (pc0[:,1]>0.0)
-        invalid_indices_1 = (pc1[:,0]>-1) & (pc1[:,0]<1.0) & (pc1[:,1]>0.0)
+        invalid_indices_0 = (pc0[:,0]>-1) & (pc0[:,0]<1.0) & (pc0[:,1]>-1.0)
+        invalid_indices_1 = (pc1[:,0]>-1) & (pc1[:,0]<1.0) & (pc1[:,1]>-1.0)
         invalid_indices = invalid_indices_0 | invalid_indices_1
         PointsInside = PointsInside & ~invalid_indices
+
+    if region is not None:
+        PointsInside = PointsInside & (pc0[:,0] > region[0]) & (pc0[:,0] < region[1]) & (pc0[:,1] > region[2]) & (pc0[:,1] < region[3]) & (pc1[:,0] > region[0]) & (pc1[:,0] < region[1]) & (pc1[:,1] > region[2]) & (pc1[:,1] < region[3])
+
     pc0 = pc0[PointsInside]
     pc1 = pc1[PointsInside]
 
@@ -210,34 +214,46 @@ if __name__ == '__main__':
     meshpath = config["paths"]["meshpath"]
     pointspath = config["paths"]["pointspath"]
     speedspath = config["paths"]["speedspath"]
-    
+    regions = config["regions"]
 
-    if True:
-        explored_data = np.load("data/explored_data.npy")
-        #! hardcode room size
-        explored_data[:, :, :6] *= 5.0
-        print("hardcoded room size scale: 5.0")
-    else:
-        points = np.load("data/passage_points.npy")
-        speeds = np.load("data/passage_speeds.npy")
-        explored_data = np.concatenate((points, speeds), axis=1)
-        explored_data = explored_data.reshape(-1, 2000, 8)
-        explored_data[:, :, :6] *= 1/5.0
-    explored_data = explored_data.reshape(-1, 8)
-    points = explored_data[:, :6]
-    speeds = explored_data[:, 6:]
-    points, speeds = uniform_gt_pts_speeds(center, offset, meshpath, minimum, maximum, sample_number, scale=scale)
-    if True:
-        meshpath = None
-        viz(points, speeds, meshpath=meshpath, scale=scale)
-        print()
-
-    if True:
-        # np.save("data/passage_points.npy", points)
-        # np.save("data/passage_speeds.npy", speeds)
-        # np.save("data/cube_passage_points.npy", points)
-        # np.save("data/cube_passage_speeds.npy", speeds)
-        # np.save("data/cabin_points_05.npy", points)
-        # np.save("data/cabin_speeds_05.npy", speeds)
+    # if True:
+    #     explored_data = np.load("data/explored_data.npy")
+    #     #! hardcode room size
+    #     explored_data[:, :, :6] *= 5.0
+    #     print("hardcoded room size scale: 5.0")
+    # else:
+    #     points = np.load("data/passage_points.npy")
+    #     speeds = np.load("data/passage_speeds.npy")
+    #     explored_data = np.concatenate((points, speeds), axis=1)
+    #     explored_data = explored_data.reshape(-1, 2000, 8)
+    #     explored_data[:, :, :6] *= 1/5.0
+    # explored_data = explored_data.reshape(-1, 8)
+    # points = explored_data[:, :6]
+    # speeds = explored_data[:, 6:]
+    for ind, region in enumerate(regions):
+        points, speeds = uniform_gt_pts_speeds(center, offset, meshpath, minimum, maximum, sample_number, scale=scale, region=region)
+        pointspath = f"data/cube_passage_points_{ind}.npy"
+        speedspath = f"data/cube_passage_speeds_{ind}.npy"
+        print("points shape: ", points.shape)
         np.save(pointspath, points)
         np.save(speedspath, speeds)
+        if False:
+            viz(points, speeds, meshpath=None, scale=scale)
+            print()
+    # region = [0.5, 3.5, 0.5, 3.5]
+    # ind = 6
+    # points, speeds = uniform_gt_pts_speeds(center, offset, meshpath, minimum, maximum, sample_number, scale=scale, region=region)
+
+
+    # if True:
+    #     # np.save("data/passage_points.npy", points)
+    #     # np.save("data/passage_speeds.npy", speeds)
+    #     # np.save("data/cube_passage_points.npy", points)
+    #     # np.save("data/cube_passage_speeds.npy", speeds)
+    #     # np.save("data/cabin_points_05.npy", points)
+    #     # np.save("data/cabin_speeds_05.npy", speeds)
+    #     pointspath = f"data/cube_passage_points_{ind}.npy"
+    #     speedspath = f"data/cube_passage_speeds_{ind}.npy"
+    #     print("points shape: ", points.shape)
+    #     np.save(pointspath, points)
+    #     np.save(speedspath, speeds)

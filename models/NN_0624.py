@@ -195,7 +195,11 @@ class NN(nn.Module):
     @staticmethod
     def Loss(model, points, Yobs, beta):
         self = model
-        tau, Xp = self.out(points)
+        learned_regions = self.learned_regions
+        active_regions = self.active_regions
+        region = set(learned_regions).union(set(active_regions))
+        # region = self.all_regions
+        tau, Xp = self.out(points, region)
         dtau = self.gradient(tau, Xp)
         D = Xp[:,self.dim:]-Xp[:,:self.dim]
         D_norm = torch.sqrt(torch.einsum('ij,ij->i', D, D))
@@ -235,8 +239,8 @@ class NN(nn.Module):
     def TravelTimes(self, Xp):
         # Apply projection from LatLong to UTM
         Xp = Xp.to(torch.device(self.Params['Device']))
-        
-        tau, coords = self.out(Xp)
+        region = self.all_regions
+        tau, coords = self.out(Xp, region)
 
        
         D = Xp[:,self.dim:]-Xp[:,:self.dim]
@@ -251,8 +255,8 @@ class NN(nn.Module):
     @staticmethod
     def Tau(self, Xp):
         Xp = Xp.to(torch.device(self.Params['Device']))
-     
-        tau, coords = self.out(Xp)
+        region = self.all_regions 
+        tau, coords = self.out(Xp, region)
 
         return tau
 
@@ -260,9 +264,9 @@ class NN(nn.Module):
     @staticmethod
     def Speed(self, Xp):
         Xp = Xp.to(torch.device(self.Params['Device']))
-
+        region = self.all_regions
         # tau
-        tau, Xp = self.out(Xp)
+        tau, Xp = self.out(Xp, region)
         # dtau
         dtau = self.gradient(tau, Xp)
         # (s-g)

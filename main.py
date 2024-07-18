@@ -281,13 +281,12 @@ class Model(torch.nn.Module):
         self.dim = self.config["data"]["dim"]
         self.scale_factor = self.config["data"]["scaling"]
         self.initial_view = Tensor(self.config["model"]["initial_view"])
+        self.all_regions = list(range(len(self.config["regions"])))
+        self.active_regions = self.all_regions
+        self.learned_regions = set()
 
         self.init_network()
         self.load_rawdata()
-
-
-
-
 
     def init_network(self):
         #! initialize the network, notice that we need to split the original model into submodels
@@ -342,7 +341,7 @@ class Model(torch.nn.Module):
             #! hardcode room size
             self.explored_data[:, :, :6] *= 5.0
             print("hardcoded room size scale: 5.0")
-        else:
+        elif False:
             # points = np.load("data/cube_passage_points.npy")
             # speeds = np.load("data/cube_passage_speeds.npy")
             # points = np.load("data/cabin_points.npy")
@@ -356,9 +355,26 @@ class Model(torch.nn.Module):
             # points = points[~invalid_indices]
             # speeds = speeds[~invalid_indices] 
             self.explored_data = np.concatenate((points, speeds), axis=1)
+        if True:
+            allpoints = []
+            allspeeds = []
+            for i in range(8):
+                points = np.load(f"data/cube_passage_points_{i}.npy").astype(np.float32)
+                speeds = np.load(f"data/cube_passage_speeds_{i}.npy").astype(np.float32)
+                allpoints.append(points)
+                allspeeds.append(speeds)
+            allpoints = np.stack(allpoints)
+            allspeeds = np.stack(allspeeds)
+            self.explored_data = np.concatenate((allpoints, allspeeds), axis=2)
         print("explored data shape:", self.explored_data.shape)
 
-    def randomize_data(self, frame_data):
+    def set_requires_grad(self, regions, requires_grad):
+        for region in regions:
+            subnet = self.subnets[region]
+            for param in subnet.parameters():
+                param.requires_grad = requires_grad
+
+    def randomize_data_prev(self, frame_data):
         prev_frame_idx = torch.randperm(self.frame_idx).tolist()[:self.frame_buffer_size-1]
         prev_framedata = self.all_framedata[prev_frame_idx]
         chosen_framedata = torch.cat((prev_framedata, frame_data.unsqueeze(0)), dim=0).view(-1, 8)
@@ -391,10 +407,12 @@ class Model(torch.nn.Module):
         cur_data = torch.cat((all_points, all_speeds), dim=1)
         return cur_data
 
-    def all_encode_out(self, x):
+    def region_encode_out(self, x, active_regions):
+        #! only normalize active regions
         x = x.clone().detach().requires_grad_(True)
         features, weights = [], []
-        for subnet in self.subnets:
+        for subnet_ind in active_regions:
+            subnet = self.subnets[subnet_ind]
             feature, weight = subnet.out(x)
             features.append(feature*weight)
             weights.append(weight)
@@ -408,15 +426,12 @@ class Model(torch.nn.Module):
     def sym_op(self, normalized_features, Xp):
         return NN.NN.sym_op(self, normalized_features, Xp)
 
-
-
-    def out(self, x):
+    def out(self, x, regions):
         #! core function to output the normalized features from all the subnets
-        normalized_features, Xp = self.all_encode_out(x)
+        normalized_features, Xp = self.region_encode_out(x, regions)
         outputs, Xp = self.sym_op(normalized_features, Xp)
         return outputs, Xp
         
-
     def gradient(self, y, x, create_graph=True):
         grad_y = torch.ones_like(y)
         grad_x = torch.autograd.grad(y, x, grad_y, only_inputs=True, retain_graph=True, create_graph=create_graph)[0]
@@ -428,29 +443,51 @@ class Model(torch.nn.Module):
 
     def train(self):
 
-        frame_epoch = 50 
+        frame_epoch = 1000
         self.alpha = 1.0
-
+        region_combination = [[0, 1, 2, 3], [3, 4, 5, 6]]
+        region_combination = [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]]
+        region_combination = [[0, 1, 2, 3], [0, 1, 2, 3, 4, 5, 6]]
+        region_combination = [[0], [1], [2], [3], [4], [5], [6]]
+        region_combination = [[0, 1, 2, 3, 4, 5, 6]]
+        # region_combination = [[0, 1, 2, 3], [4, 5, 6]]
+        region_combination = [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6]]
+        region_combination = [[0], [0, 1], [0, 1, 2], [0, 1, 2, 3], [0, 1, 2, 3, 4], [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5, 6]]
+        region_combination = [[0], [0, 1], [0, 1, 2], [0, 1, 2, 3], [0, 1, 2, 3, 4], [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5, 6], [0, 1, 2, 3, 4, 5, 6, 7], [0, 1, 2, 3, 4, 5, 6, 7], [0, 1, 2, 3, 4, 5, 6, 7], [0, 1, 2, 3, 4, 5, 6, 7]]
         while True:
             if False:
                 #? by frame sequence
                 frame_data = self.explored_data[self.frame_idx]
                 frame_data = torch.tensor(frame_data).to(self.Params['Device'])
-            else:
+            elif False:
                 #? by random 
                 explored_data = self.explored_data.reshape(-1, 8)
                 rand_idx = torch.randperm(explored_data.shape[0])[:5000*64]
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
-            total_diff, cur_data = self.train_core(frame_epoch, frame_data)
+            if True:
+                #? by region combination
+                self.active_regions = region_combination[self.frame_idx % len(region_combination)]
+                explored_data = self.explored_data[self.active_regions].reshape(-1, 8)
+                rand_idx = torch.randperm(explored_data.shape[0])[:200000]
+                frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
+                self.set_requires_grad(self.active_regions, True)
+                self.set_requires_grad(list(set(self.all_regions)-set(self.active_regions)), False)
+            total_diff = self.train_core(frame_epoch, frame_data)
 
-            self.plot(self.initial_view, self.epoch, total_diff.item(), self.alpha, cur_data[:, :6].clone().cpu().numpy(), None)
+            # self.plot(self.initial_view, self.epoch, total_diff.item(), self.alpha, cur_data[:, :6].clone().cpu().numpy(), None)
 
             with torch.no_grad():
                 self.save(epoch=self.epoch, val_loss=total_diff)
 
+            # self.learned_regions.update(self.active_regions)
+            # self.learned_regions = set([self.active_regions[-1]])
+            # self.learned_regions = set(self.all_regions)
+
             self.frame_idx += 1
-            if self.frame_idx >= len(self.explored_data):
-                break
+            if self.frame_idx >= len(region_combination):
+                break 
+            # if self.frame_idx >= len(self.explored_data):
+            #     break
 
     def save(self, epoch='', val_loss=''):
         '''
@@ -479,7 +516,6 @@ class Model(torch.nn.Module):
         self.subnets.float()
         self.subnets.eval()
 
-
     def train_core(self, epoch, frame_data):
         beta = 1.0
         prev_diff = 1.0
@@ -489,12 +525,13 @@ class Model(torch.nn.Module):
             self.all_framedata = frame_data.unsqueeze(0)
         else:
             self.all_framedata = torch.cat((self.all_framedata, frame_data.unsqueeze(0)), dim=0)
-        print(self.all_framedata.shape)
+        # print(self.all_framedata.shape)
 
 
         #! mix data so that the start and end points are from different frames
         # if is_one_frame:
-        cur_data = self.randomize_data(frame_data)
+        cur_data = self.randomize_data_prev(frame_data)
+        # cur_data = frame_data
         dataloader = FastTensorDataLoader(cur_data, batch_size=int(self.Params['Training']['Batch Size']), shuffle=True)
 
         frame_epoch = epoch
@@ -591,7 +628,10 @@ class Model(torch.nn.Module):
                 with torch.no_grad():
                     print("Epoch = {} -- Loss = {:.4e} -- Alpha = {:.4e}".format(
                         self.epoch, total_diff.item(), self.alpha))
-        return total_diff, cur_data
+            
+            if self.epoch % self.Params['Training']['Save Every * Epoch'] == 0:
+                self.plot(self.initial_view, self.epoch, total_diff.item(), self.alpha, cur_data[:, :6].clone().cpu().numpy(), None)
+        return total_diff
 
     def TravelTimes(self, Xp):
         # Apply projection from LatLong to UTM
@@ -641,7 +681,6 @@ class Model(torch.nn.Module):
         output, _ = self.sym_op(normalized_feature, x)
         return output, x
  
-
     def plot_out_end_valid(self, x, valid_indices):
         #TODO: only filter the end points
         x = x.clone().detach().requires_grad_(True)
@@ -662,8 +701,6 @@ class Model(torch.nn.Module):
         normalized_feature = torch.sum(torch.stack(normalized_features), dim=0)
         output, _ = self.sym_op(normalized_feature, x)
         return output, x
-
-
 
     def plot_end_out(self, x):
         x = x.clone().detach().requires_grad_(False)
@@ -696,8 +733,6 @@ class Model(torch.nn.Module):
             output, _ = self.sym_op(feature, x)
             outputs.append(output)
         return outputs
-
-
 
     def plot(self, src, epoch, total_train_loss, alpha, cur_points=None, camera_matrix=None, traj_list = None):
         # limit = 1
@@ -842,7 +877,6 @@ class Model(torch.nn.Module):
             plt.tight_layout()
             plt.savefig(self.folder+"/plots"+str(epoch) + "_subnets.png")
             plt.close()
-
 
     def plot_valid(self, src, valid_indices):
         offsetxyz = self.config['data']['offset']
