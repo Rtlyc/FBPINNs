@@ -71,7 +71,7 @@ def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None,
                 #     np.outer(end_speeds, [255, 255, 255, 80])).astype(np.uint8)
 
                 point_cloud = trimesh.PointCloud(start_points, start_colors)
-                point_cloud = trimesh.PointCloud(end_points, end_colors)
+                # point_cloud = trimesh.PointCloud(end_points, end_colors)
                 scene.add_geometry([point_cloud])
         
 
@@ -201,7 +201,10 @@ if __name__ == '__main__':
 
     #! load configs
     config_path = "configs/cabin.yaml"
+    config_path = "configs/maze.yaml"
+    config_path = "configs/ruiqi.yaml"
     config_path = "configs/cube_passage.yaml"
+    config_path = "configs/mesh.yaml"
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
     center = np.array(config["data"]["center"])
@@ -214,6 +217,7 @@ if __name__ == '__main__':
     meshpath = config["paths"]["meshpath"]
     pointspath = config["paths"]["pointspath"]
     speedspath = config["paths"]["speedspath"]
+    name = config["paths"]["name"]
     regions = config["regions"]
 
     # if True:
@@ -232,12 +236,12 @@ if __name__ == '__main__':
     # speeds = explored_data[:, 6:]
     for ind, region in enumerate(regions):
         points, speeds = uniform_gt_pts_speeds(center, offset, meshpath, minimum, maximum, sample_number, scale=scale, region=region)
-        pointspath = f"data/cube_passage_points_{ind}.npy"
-        speedspath = f"data/cube_passage_speeds_{ind}.npy"
+        pointspath = f"data/{name}_points_{ind}.npy"
+        speedspath = f"data/{name}_speeds_{ind}.npy"
         print("points shape: ", points.shape)
         np.save(pointspath, points)
         np.save(speedspath, speeds)
-        if False:
+        if True:
             viz(points, speeds, meshpath=None, scale=scale)
             print()
     # region = [0.5, 3.5, 0.5, 3.5]

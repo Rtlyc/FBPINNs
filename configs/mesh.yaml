@@ -1,12 +1,12 @@
 model:
-  initial_view: [-0.0, -0.2, -0.1]
-  normalization: True
+  initial_view: [-0.3, -0.2, -0.]
+  normalization: False
   use_lipschitz: False
-  loss_n_hype: -0.5
+  loss_n_hype: -2.0
   sym_div: True # whether to divide scale
   sym_div_hype: 50
   sym_mult_hype: 50
-  layer_sizes: [128, 128, 128, 128, 256]
+  layer_sizes: [64, 64, 64, 64, 256]
   contour_density: 0.02
 
 # regions:
@@ -39,12 +39,12 @@ data:
   offset: [0.5, 0.5, 0.5]
   dim: 3
   scaling: 1.0
-  minimum: 0.0015
-  maximum: 0.015
+  minimum: 0.005
+  maximum: 0.05
   sample_num: 200000
 
 paths:
-  name: 'ruiqi'
-  meshpath: './data/cabin_mesh.obj'
-  pointspath: './data/ruiqi_points.npy'
-  speedspath: './data/ruiqi_speeds.npy'
+  name: 'mesh'
+  meshpath: './data/mesh.obj'
+  pointspath: './data/mesh_points.npy'
+  speedspath: './data/mesh_speeds.npy'

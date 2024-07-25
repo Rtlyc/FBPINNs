@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import Linear
+import torch.nn.functional as F
 
 def lip_norm(w):
     #y = x@w.T+b
@@ -13,6 +14,20 @@ def lip_norm(w):
     #print(w.shape)
     return w * scale.unsqueeze(1)
 
+def l1_distance(f_start, f_goal):
+    return torch.sum(torch.abs(f_start - f_goal), dim=1)
+
+def l2_distance(f_start, f_goal):
+    return torch.sqrt(torch.sum((f_start - f_goal)**2, dim=1))
+
+def cosine_distance(f_start, f_goal):
+    f_start_norm = F.normalize(f_start, p=2, dim=1)
+    f_goal_norm = F.normalize(f_goal, p=2, dim=1)
+    cosine_similarity = torch.sum(f_start_norm * f_goal_norm, dim=1)
+    return 1 - cosine_similarity
+
+def linf_distance(f_start, f_goal):
+    return torch.max(torch.abs(f_start - f_goal), dim=1)[0]
 
 # def lip_norm(self, w):
 #         #y = x@w.T+b
@@ -61,7 +76,8 @@ class SubNN(nn.Module):
 
     
     @staticmethod
-    def encoder_out(self, coords):
+    def encoder_out(submodel, coords):
+        self = submodel
         # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
         use_lip = self.config['model']['use_lipschitz']
         x0 = coords[:,:self.dim]
@@ -77,6 +93,10 @@ class SubNN(nn.Module):
             w = lip_norm(w)
 
             y = x@w.T+b
+            
+            # x = x.unsqueeze(1)
+            # x = self.norm_layers[0](x)
+            # x = x.squeeze(1)
             x = torch.sin(2*y)
 
             for ii in range(1,self.nl+1):
@@ -87,6 +107,9 @@ class SubNN(nn.Module):
                 w = lip_norm(w)
 
                 y = x@w.T+b
+                # x = x.unsqueeze(1)
+                # x = self.norm_layers[ii](x)
+                # x = x.squeeze(1)
                 x  = torch.sin(2*y)
 
             # x = self.encoder[-1](x)
@@ -191,6 +214,31 @@ class NN(nn.Module):
         # x = 1000*torch.acos(x-0.000001)/(scale0*scale1) #250
         # x = torch.acos(x-0.000001)*(scale0*scale1)/50 #250
         return x, Xp
+
+    # @staticmethod
+    # def sym_op(model, normalized_features, Xp):
+    #     x0 = normalized_features[:Xp.shape[0],:]#.unsqueeze(1)
+    #     x1 = normalized_features[Xp.shape[0]:,:]#.unsqueeze(1)
+
+    #     # x = torch.sqrt((x0-x1)**2+1e-6)
+    #     # x = x.view(x.shape[0], -1, 16)
+    #     # x = torch.logsumexp(10*x, -1)
+    #     # x = 0.01 * torch.sum(x, dim=1).unsqueeze(1)
+
+    #     scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1) 
+    #     x0 = x0/scale0
+
+    #     scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1) 
+    #     x1 = x1/scale1
+
+    #     x = x0*x1
+
+    #     x = torch.sum(x,dim=1).unsqueeze(1)
+    #     sym_div_hype = model.config['model']['sym_div_hype']
+    #     x =  torch.acos(x-0.000001)
+    #     # #! use L1 norm
+    #     # x = l1_distance(x0, x1)
+    #     return x, Xp
     
     @staticmethod
     def Loss(model, points, Yobs, beta):
@@ -202,21 +250,24 @@ class NN(nn.Module):
         tau, Xp = self.out(points, region)
         dtau = self.gradient(tau, Xp)
         D = Xp[:,self.dim:]-Xp[:,:self.dim]
-        D_norm = torch.sqrt(torch.einsum('ij,ij->i', D, D))
+        # D_norm = torch.sqrt(torch.einsum('ij,ij->i', D, D))
         DT0 = dtau[:,:self.dim]
         DT1 = dtau[:,self.dim:]
         S0 = torch.einsum('ij,ij->i', DT0, DT0)
         S1 = torch.einsum('ij,ij->i', DT1, DT1)
-        T00 = tau[:,0]**2
+        # T00 = tau[:,0]**2
 
-        Ypred0 = torch.sqrt(S0)
-        Ypred1 = torch.sqrt(S1)
+        epsilon = 1e-6
+        epsilon = 0
+
+        Ypred0 = torch.sqrt(S0+epsilon)
+        Ypred1 = torch.sqrt(S1+epsilon)
         sq_Yobs0 = Yobs[:,0]
         sq_Yobs1 = Yobs[:,1]
         l0 = sq_Yobs0*(Ypred0)
         l1 = sq_Yobs1*(Ypred1)
-        loss0 = (torch.sqrt(l0)-1)**2
-        loss1 = (torch.sqrt(l1)-1)**2
+        loss0 = (torch.sqrt(l0+epsilon)-1)**2
+        loss1 = (torch.sqrt(l1+epsilon)-1)**2
         diff = loss0 + loss1
         
         #
@@ -233,8 +284,6 @@ class NN(nn.Module):
 
         return loss, loss_n, diff
 
-
-    
     @staticmethod
     def TravelTimes(self, Xp):
         # Apply projection from LatLong to UTM

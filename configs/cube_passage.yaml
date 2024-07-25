@@ -1,6 +1,6 @@
 model:
   initial_view: [-2.0, 2.0, -0.0]
-  normalization: True
+  normalization: False
   use_lipschitz: True
   loss_n_hype: -0.5
   sym_div: True # whether to divide scale
@@ -48,6 +48,17 @@ regions:
   - [0.5, 3.5, 0.5, 3.5]
   - [-1.5, 1.5, 0.5, 3.5]
 
+region_combination:
+  - [0]
+  - [0, 1]
+  - [0, 1, 2]
+  - [0, 1, 2, 3]
+  - [0, 1, 2, 3, 4]
+  - [0, 1, 2, 3, 4, 5]
+  - [0, 1, 2, 3, 4, 5, 6]
+  - [0, 1, 2, 3, 4, 5, 6, 7]
+  - [0, 1, 2, 3, 4, 5, 6, 7]
+
 data:
   center: [0, 0, 0]
   offset: [3, 3, 3]
@@ -58,6 +69,7 @@ data:
   sample_num: 200000
 
 paths:
+  name: 'cube_passage'
   meshpath: './data/cube_passage.obj'
   pointspath: './data/cube_passage_empty_points.npy'
   speedspath: './data/cube_passage_empty_speeds.npy'

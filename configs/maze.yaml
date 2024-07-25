@@ -1,0 +1,51 @@
+model:
+  initial_view: [0.0, 0.0, 0.2]
+  normalization: True
+  use_lipschitz: True
+  loss_n_hype: -0.2
+  sym_div: True # whether to divide scale
+  sym_div_hype: 50
+  sym_mult_hype: 50
+  layer_sizes: [64, 64, 64, 64, 256]
+  contour_density: 0.04
+
+# regions:
+#   - [-1, 1, -1, 1]
+
+# region_combination:
+#   - [0]
+
+# regions:
+#   - [-1.1, 0.1, -0.1, 1.1]
+#   - [-0.1, 1.1, -0.1, 1.1]
+#   - [-1.1, 0.1, -1.1, 0.1]
+#   - [-0.1, 1.1, -1.1, 0.1]
+
+# region_combination:
+#   - [0, 1, 2, 3]
+
+
+regions:
+  - [-1.1, 0.1, -0.1, 1.1]
+  - [-0.1, 1.1, -0.1, 1.1]
+  - [-1.1, 0.1, -1.1, 0.1]
+  - [-0.1, 1.1, -1.1, 0.1]
+
+region_combination:
+  - [0, 1, 2, 3]
+
+
+data:
+  center: [0, 0, 0.2]
+  offset: [1, 1, 0.2]
+  dim: 3
+  scaling: 1.0
+  minimum: 0.01
+  maximum: 0.1 # 1.0
+  sample_num: 200000
+
+paths:
+  name: 'maze'
+  meshpath: './data/maze.obj'
+  pointspath: './data/maze_points.npy'
+  speedspath: './data/maze_speeds.npy'

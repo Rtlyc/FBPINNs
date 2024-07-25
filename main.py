@@ -3,6 +3,7 @@ This script serves as an executing script to transform the original model into a
 """
 
 import torch 
+import torch.nn as nn
 import matplotlib.pyplot as plt
 import os 
 from datetime import datetime, timedelta
@@ -15,6 +16,8 @@ from torch.nn import Linear
 from torch.autograd import Variable
 from torch import Tensor
 from models import NN_0624 as NN
+from torch.utils.tensorboard import SummaryWriter
+import time
 
 
 class FastTensorDataLoader:
@@ -161,6 +164,7 @@ class SubModel(torch.nn.Module):
 
     def init_network(self):
         self.encoder = NN.SubNN.init_network(self.layer_sizes, self.input_size)
+        self.norm_layers = nn.ModuleList([nn.InstanceNorm1d(size) for size in self.layer_sizes])
 
     def input_mapping(self, x):
         w = 2.*np.pi*self.B
@@ -226,6 +230,7 @@ class Model(torch.nn.Module):
         # self.scale_factor = scale_factor
         current_time = datetime.utcnow()-timedelta(hours=5)
         self.folder = self.Params['ModelPath']+"/"+current_time.strftime("%m_%d_%H_%M")
+        self.writer = SummaryWriter(self.folder)
         if not os.path.exists(self.folder):
             os.makedirs(self.folder)
 
@@ -282,6 +287,8 @@ class Model(torch.nn.Module):
         self.scale_factor = self.config["data"]["scaling"]
         self.initial_view = Tensor(self.config["model"]["initial_view"])
         self.all_regions = list(range(len(self.config["regions"])))
+        self.name = self.config["paths"]["name"]
+        self.region_combination = self.config["region_combination"]
         self.active_regions = self.all_regions
         self.learned_regions = set()
 
@@ -336,11 +343,11 @@ class Model(torch.nn.Module):
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.Params['Training']['Learning Rate'], weight_decay=0.2)
 
     def load_rawdata(self):
-        if False:
+        if True:
             self.explored_data = np.load("data/explored_data.npy")
             #! hardcode room size
-            self.explored_data[:, :, :6] *= 5.0
-            print("hardcoded room size scale: 5.0")
+            # self.explored_data[:, :, :6] *= 5.0
+            # print("hardcoded room size scale: 5.0")
         elif False:
             # points = np.load("data/cube_passage_points.npy")
             # speeds = np.load("data/cube_passage_speeds.npy")
@@ -355,12 +362,12 @@ class Model(torch.nn.Module):
             # points = points[~invalid_indices]
             # speeds = speeds[~invalid_indices] 
             self.explored_data = np.concatenate((points, speeds), axis=1)
-        if True:
+        if False:
             allpoints = []
             allspeeds = []
-            for i in range(8):
-                points = np.load(f"data/cube_passage_points_{i}.npy").astype(np.float32)
-                speeds = np.load(f"data/cube_passage_speeds_{i}.npy").astype(np.float32)
+            for i in range(len(self.all_regions)):
+                points = np.load(f"data/{self.name}_points_{i}.npy").astype(np.float32)
+                speeds = np.load(f"data/{self.name}_speeds_{i}.npy").astype(np.float32)
                 allpoints.append(points)
                 allspeeds.append(speeds)
             allpoints = np.stack(allpoints)
@@ -443,7 +450,7 @@ class Model(torch.nn.Module):
 
     def train(self):
 
-        frame_epoch = 1000
+        frame_epoch = 10000
         self.alpha = 1.0
         region_combination = [[0, 1, 2, 3], [3, 4, 5, 6]]
         region_combination = [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]]
@@ -454,17 +461,20 @@ class Model(torch.nn.Module):
         region_combination = [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6]]
         region_combination = [[0], [0, 1], [0, 1, 2], [0, 1, 2, 3], [0, 1, 2, 3, 4], [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5, 6]]
         region_combination = [[0], [0, 1], [0, 1, 2], [0, 1, 2, 3], [0, 1, 2, 3, 4], [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5, 6], [0, 1, 2, 3, 4, 5, 6, 7], [0, 1, 2, 3, 4, 5, 6, 7], [0, 1, 2, 3, 4, 5, 6, 7], [0, 1, 2, 3, 4, 5, 6, 7]]
+        region_combination = [[0]]
+        # region_combination = [[0, 1, 2, 3]]
+        region_combination = self.region_combination
         while True:
             if False:
                 #? by frame sequence
                 frame_data = self.explored_data[self.frame_idx]
                 frame_data = torch.tensor(frame_data).to(self.Params['Device'])
-            elif False:
+            elif True:
                 #? by random 
                 explored_data = self.explored_data.reshape(-1, 8)
                 rand_idx = torch.randperm(explored_data.shape[0])[:5000*64]
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
-            if True:
+            if False:
                 #? by region combination
                 self.active_regions = region_combination[self.frame_idx % len(region_combination)]
                 explored_data = self.explored_data[self.active_regions].reshape(-1, 8)
@@ -537,11 +547,12 @@ class Model(torch.nn.Module):
         frame_epoch = epoch
         # start_time = time.time()
         for e in range(frame_epoch):
+            epoch_start_time = time.time()
             self.epoch += 1
             total_train_loss = 0
             total_diff=0
 
-            gamma=0.001#max((4000.0-epoch)/4000.0/20,0.001)
+            # gamma=0.001#max((4000.0-epoch)/4000.0/20,0.001)
             # mu = 10
 
             current_state = pickle.loads(pickle.dumps(self.state_dict()))
@@ -614,7 +625,10 @@ class Model(torch.nn.Module):
                     print("RepeatEpoch = {} -- Loss = {:.4e} -- Alpha = {:.4e}".format(
                         self.epoch, total_diff, self.alpha))
                 
+            self.writer.add_scalar('Loss/Train', total_diff.item(), self.epoch)
+            self.writer.add_scalar('Epoch Time', time.time()-epoch_start_time, self.epoch)
                 
+
             #'''
             self.total_train_loss.append(total_train_loss)
             
@@ -930,8 +944,10 @@ def main():
     # torch.cuda.memory._record_memory_history(enabled=True)
     modelPath = './Experiments'
     config_path = "configs/cabin.yaml"
+    config_path = "configs/maze.yaml"
     config_path = "configs/ruiqi.yaml"
     config_path = "configs/cube_passage.yaml"
+    config_path = "configs/mesh.yaml"
     model    = Model(modelPath, config_path, device='cuda:0')
     model.train()
 
