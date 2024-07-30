@@ -80,12 +80,14 @@ class SubNN(nn.Module):
         self = submodel
         # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
         use_lip = self.config['model']['use_lipschitz']
+        use_1DNorm = self.config['model']['use_1DNorm']
         x0 = coords[:,:self.dim]
         x1 = coords[:,self.dim:]
         x = torch.vstack((x0,x1))
         x = self.input_mapping(x)
 
         if use_lip:
+            lip_const = self.config['model']['lip_const']
             w = self.encoder[0].weight
             b = self.encoder[0].bias
 
@@ -94,10 +96,11 @@ class SubNN(nn.Module):
 
             y = x@w.T+b
             
-            # x = x.unsqueeze(1)
-            # x = self.norm_layers[0](x)
-            # x = x.squeeze(1)
-            x = torch.sin(2*y)
+            if use_1DNorm:
+                y = y.unsqueeze(1)
+                y = self.norm_layers[0](y)
+                y = y.squeeze(1)
+            x = torch.sin(lip_const*y)
 
             for ii in range(1,self.nl+1):
                 w = self.encoder[ii].weight
@@ -107,17 +110,29 @@ class SubNN(nn.Module):
                 w = lip_norm(w)
 
                 y = x@w.T+b
-                # x = x.unsqueeze(1)
-                # x = self.norm_layers[ii](x)
-                # x = x.squeeze(1)
-                x  = torch.sin(2*y)
+                if use_1DNorm:
+                    y = y.unsqueeze(1)
+                    y = self.norm_layers[ii](y)
+                    y = y.squeeze(1)
+                x  = torch.sin(lip_const*y)
 
             # x = self.encoder[-1](x)
         else:
-            x = torch.sin(self.encoder[0](x))
+            x = self.encoder[0](x)
+            if use_1DNorm:
+                x = x.unsqueeze(1)
+                x = self.norm_layers[0](x)
+                x = x.squeeze(1)
+            x = torch.sin(x)
 
             for ii in range(1,self.nl):
-                x = torch.sin(self.encoder[ii](x))
+                # x = torch.sin(self.encoder[ii](x))
+                x = self.encoder[ii](x)
+                if use_1DNorm:
+                    x = x.unsqueeze(1)
+                    x = self.norm_layers[ii](x)
+                    x = x.squeeze(1)
+                x = torch.sin(x)
 
             x = self.encoder[-1](x)
         return x, coords
@@ -208,6 +223,7 @@ class NN(nn.Module):
         if model.config['model']['sym_div'] == True:
             sym_div_hype = model.config['model']['sym_div_hype']
             x = sym_div_hype * torch.acos(x-0.000001)/(scale0*scale1)
+            # x = torch.acos(x-0.000001)
         else:
             sym_mult_hype = model.config['model']['sym_mult_hype']
             x = torch.acos(x-0.000001)*(scale0*scale1)/sym_mult_hype
@@ -220,22 +236,22 @@ class NN(nn.Module):
     #     x0 = normalized_features[:Xp.shape[0],:]#.unsqueeze(1)
     #     x1 = normalized_features[Xp.shape[0]:,:]#.unsqueeze(1)
 
-    #     # x = torch.sqrt((x0-x1)**2+1e-6)
-    #     # x = x.view(x.shape[0], -1, 16)
-    #     # x = torch.logsumexp(10*x, -1)
-    #     # x = 0.01 * torch.sum(x, dim=1).unsqueeze(1)
+    #     x = torch.sqrt((x0-x1)**2+1e-6)
+    #     x = x.view(x.shape[0], -1, 16)
+    #     x = torch.logsumexp(10*x, -1)
+    #     x = 0.01 * torch.sum(x, dim=1).unsqueeze(1)
 
-    #     scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1) 
-    #     x0 = x0/scale0
+    #     # scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1) 
+    #     # x0 = x0/scale0
 
-    #     scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1) 
-    #     x1 = x1/scale1
+    #     # scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1) 
+    #     # x1 = x1/scale1
 
-    #     x = x0*x1
+    #     # x = x0*x1
 
-    #     x = torch.sum(x,dim=1).unsqueeze(1)
-    #     sym_div_hype = model.config['model']['sym_div_hype']
-    #     x =  torch.acos(x-0.000001)
+    #     # x = torch.sum(x,dim=1).unsqueeze(1)
+    #     # sym_div_hype = model.config['model']['sym_div_hype']
+    #     # x =  torch.acos(x-0.000001)
     #     # #! use L1 norm
     #     # x = l1_distance(x0, x1)
     #     return x, Xp
@@ -258,7 +274,7 @@ class NN(nn.Module):
         # T00 = tau[:,0]**2
 
         epsilon = 1e-6
-        epsilon = 0
+        # epsilon = 0
 
         Ypred0 = torch.sqrt(S0+epsilon)
         Ypred1 = torch.sqrt(S1+epsilon)

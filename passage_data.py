@@ -71,7 +71,7 @@ def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None,
                 #     np.outer(end_speeds, [255, 255, 255, 80])).astype(np.uint8)
 
                 point_cloud = trimesh.PointCloud(start_points, start_colors)
-                # point_cloud = trimesh.PointCloud(end_points, end_colors)
+                point_cloud = trimesh.PointCloud(end_points, end_colors)
                 scene.add_geometry([point_cloud])
         
 
@@ -104,24 +104,32 @@ def unsigned_distance_without_bvh(triangles, query_points):
 
     return unsigned_distance
 
-def uniform_gt_pts_speeds(center, offsetxyz, meshpath=None, minimum=0.07, maximum=0.3, num=10000, scale=1.0, region=None):
+def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None, minimum=0.07, maximum=0.3, num=10000, scale=1.0, region=None):
+    pc0 = torch.rand((num*10, 3))
     random_offsets = 2*torch.rand(num*10, 3)-1
-    random_offsets[:,0] = random_offsets[:,0]*offsetxyz[0]+center[0]
-    random_offsets[:,1] = random_offsets[:,1]*offsetxyz[1]+center[1]
-    random_offsets[:,2] = random_offsets[:,2]*offsetxyz[2]+center[2]
-    pc0 = random_offsets
+    pc0[:,0] = random_offsets[:,0]*offsetxyz[0]+center[0]
+    random_offsets = 2*torch.rand(num*10, 3)-1
+    pc0[:,1] = random_offsets[:,1]*offsetxyz[1]+center[1]
+    random_offsets = 2*torch.rand(num*10, 3)-1
+    pc0[:,2] = random_offsets[:,2]*offsetxyz[2]+center[2]
 
     dP = torch.rand((num*10, 3))-0.5
-    rL = (torch.rand(num*10, 3))
-    rL[:,0] = rL[:,0]*offsetxyz[0]
-    rL[:,1] = rL[:,1]*offsetxyz[1]
-    rL[:,2] = rL[:,2]*offsetxyz[2]
+    rL = torch.rand((num*10, 3))
+    random_offsets = 2*torch.rand(num*10, 3)-1
+    rL[:,0] = random_offsets[:,0]*offsetxyz[0]
+    random_offsets = 2*torch.rand(num*10, 3)-1
+    rL[:,1] = random_offsets[:,1]*offsetxyz[1]
+    random_offsets = 2*torch.rand(num*10, 3)-1
+    rL[:,2] = random_offsets[:,2]*offsetxyz[2]
+    # rL[:,0] = rL[:,0]*0.3
+    # rL[:,1] = rL[:,1]*0.3
+    # rL[:,2] = rL[:,2]*0.3
     pc1 = pc0 + torch.nn.functional.normalize(dP, dim=1) * rL
 
-    PointsInside = torch.all((pc1 <= offsetxyz[0]), dim=1) & torch.all((pc1 >= -offsetxyz[0]), dim=1)
-    PointsInsidex = (pc1[:,0] <= center[0]+offsetxyz[0]) & (pc1[:,0] >= center[0]-offsetxyz[0])
-    PointsInsidey = (pc1[:,1] <= center[1]+offsetxyz[1]) & (pc1[:,1] >= center[1]-offsetxyz[1])
-    PointsInsidez = (pc1[:,2] <= center[2]+offsetxyz[2]) & (pc1[:,2] >= center[2]-offsetxyz[2])
+    PointsInside = torch.all((pc1 <= limitxyz[0]), dim=1) & torch.all((pc1 >= -limitxyz[0]), dim=1)
+    PointsInsidex = (pc1[:,0] <= center[0]+limitxyz[0]) & (pc1[:,0] >= center[0]-limitxyz[0])
+    PointsInsidey = (pc1[:,1] <= center[1]+limitxyz[1]) & (pc1[:,1] >= center[1]-limitxyz[1])
+    PointsInsidez = (pc1[:,2] <= center[2]+limitxyz[2]) & (pc1[:,2] >= center[2]-limitxyz[2])
     PointsInside = PointsInsidex & PointsInsidey & PointsInsidez
     #! only for cube_passage
     if False:
@@ -145,6 +153,7 @@ def uniform_gt_pts_speeds(center, offsetxyz, meshpath=None, minimum=0.07, maximu
     x0 = pc0.cpu().numpy()
     y0 = unsigned_distance_without_bvh(t_obs, x0)
     y0 = torch.from_numpy(y0).float().to(device).unsqueeze(1)
+    y0 -= wallsize
     # bounds to speeds
     # speeds = torch.clip(bounds, minimum, maximum)/maximum
     y0 = torch.clip(y0, minimum, maximum)/maximum
@@ -162,6 +171,7 @@ def uniform_gt_pts_speeds(center, offsetxyz, meshpath=None, minimum=0.07, maximu
     y1 = unsigned_distance_without_bvh(t_obs, x1)
     y1 = torch.from_numpy(y1).float().to(device).unsqueeze(1)
     # y1 = torch.clip((y1 - minimum) / (maximum - minimum), 0, 1)
+    y1 -= wallsize
     y1 = torch.clip(y1, minimum, maximum)/maximum
 
     x0 = pc0[start_indices]
@@ -203,12 +213,14 @@ if __name__ == '__main__':
     config_path = "configs/cabin.yaml"
     config_path = "configs/maze.yaml"
     config_path = "configs/ruiqi.yaml"
-    config_path = "configs/cube_passage.yaml"
     config_path = "configs/mesh.yaml"
+    config_path = "configs/cube_passage.yaml"
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
     center = np.array(config["data"]["center"])
     offset = np.array(config["data"]["offset"])
+    limit = np.array(config["data"]["limit"])
+    wallsize = config["data"]["wallsize"]
     dim = config["data"]["dim"]
     minimum = config["data"]["minimum"]
     maximum = config["data"]["maximum"]
@@ -219,6 +231,13 @@ if __name__ == '__main__':
     speedspath = config["paths"]["speedspath"]
     name = config["paths"]["name"]
     regions = config["regions"]
+
+    if False: #? ground truth points viz
+        explored_data = np.load("data/explored_data.npy").reshape(-1, 8)
+        viz(explored_data[:, :6], explored_data[:, 6:], meshpath=None, scale=scale)
+        points = np.load("data/ruiqi_points.npy")
+        speeds = np.load("data/ruiqi_speeds.npy")
+        viz(points, speeds, meshpath=None, scale=scale)
 
     # if True:
     #     explored_data = np.load("data/explored_data.npy")
@@ -235,7 +254,7 @@ if __name__ == '__main__':
     # points = explored_data[:, :6]
     # speeds = explored_data[:, 6:]
     for ind, region in enumerate(regions):
-        points, speeds = uniform_gt_pts_speeds(center, offset, meshpath, minimum, maximum, sample_number, scale=scale, region=region)
+        points, speeds = uniform_gt_pts_speeds(center, offset, limit, wallsize, meshpath, minimum, maximum, sample_number, scale=scale, region=region)
         pointspath = f"data/{name}_points_{ind}.npy"
         speedspath = f"data/{name}_speeds_{ind}.npy"
         print("points shape: ", points.shape)

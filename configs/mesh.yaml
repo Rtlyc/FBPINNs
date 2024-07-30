@@ -1,7 +1,8 @@
 model:
   initial_view: [-0.3, -0.2, -0.]
   normalization: False
-  use_lipschitz: False
+  use_lipschitz: True
+  use_1DNorm: False
   loss_n_hype: -2.0
   sym_div: True # whether to divide scale
   sym_div_hype: 50
@@ -26,6 +27,13 @@ model:
 # region_combination:
 #   - [0, 1, 2, 3, 4, 5, 6, 7, 8]
 
+# region_combination:
+#   - [0, 1, 2, 3, 4, 5, 6, 7, 8]
+#   - [3, 6]
+#   - [0, 3, 6]
+#   - [1, 4, 7]
+#   - [2, 5, 8] 
+
 regions:
   - [-1, 1, -1, 1]
 
@@ -37,11 +45,13 @@ region_combination:
 data:
   center: [0, 0, 0]
   offset: [0.5, 0.5, 0.5]
+  limit: [0.55, 0.38, 0.1]
   dim: 3
   scaling: 1.0
-  minimum: 0.005
-  maximum: 0.05
-  sample_num: 200000
+  minimum: 0.0035
+  maximum: 0.035
+  wallsize: 0.002
+  sample_num: 500000
 
 paths:
   name: 'mesh'

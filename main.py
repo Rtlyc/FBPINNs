@@ -343,11 +343,14 @@ class Model(torch.nn.Module):
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.Params['Training']['Learning Rate'], weight_decay=0.2)
 
     def load_rawdata(self):
-        if True:
+        if False:
             self.explored_data = np.load("data/explored_data.npy")
             #! hardcode room size
             # self.explored_data[:, :, :6] *= 5.0
             # print("hardcoded room size scale: 5.0")
+            points = np.load("data/mesh_points_0.npy")
+            speeds = np.load("data/mesh_speeds_0.npy")
+            self.explored_data = np.concatenate((points, speeds), axis=1)
         elif False:
             # points = np.load("data/cube_passage_points.npy")
             # speeds = np.load("data/cube_passage_speeds.npy")
@@ -362,7 +365,7 @@ class Model(torch.nn.Module):
             # points = points[~invalid_indices]
             # speeds = speeds[~invalid_indices] 
             self.explored_data = np.concatenate((points, speeds), axis=1)
-        if False:
+        if True:
             allpoints = []
             allspeeds = []
             for i in range(len(self.all_regions)):
@@ -414,6 +417,20 @@ class Model(torch.nn.Module):
         cur_data = torch.cat((all_points, all_speeds), dim=1)
         return cur_data
 
+    def randomize_data_cur(self, frame_data):
+        rand_start_idx = torch.randperm(frame_data.shape[0])[:500000]
+        rand_end_idx = torch.randperm(frame_data.shape[0])[:500000]
+        rand_start_xyz = frame_data[rand_start_idx][:, :3]
+        rand_end_xyz = frame_data[rand_end_idx][:, 3:6]
+        rand_start_speed = frame_data[rand_start_idx][:, 6:7]
+        rand_end_speed = frame_data[rand_end_idx][:, 7:8]
+        global_points_combination = torch.cat((rand_start_xyz, rand_end_xyz), dim=1)
+        global_speeds_combination = torch.cat((rand_start_speed, rand_end_speed), dim=1)
+        global_data = torch.cat((global_points_combination, global_speeds_combination), dim=1)
+        # cur_data = global_data
+        cur_data = torch.cat((frame_data, global_data), dim=0)
+        return cur_data
+
     def region_encode_out(self, x, active_regions):
         #! only normalize active regions
         x = x.clone().detach().requires_grad_(True)
@@ -450,7 +467,7 @@ class Model(torch.nn.Module):
 
     def train(self):
 
-        frame_epoch = 10000
+        frame_epoch = 2000
         self.alpha = 1.0
         region_combination = [[0, 1, 2, 3], [3, 4, 5, 6]]
         region_combination = [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]]
@@ -472,13 +489,22 @@ class Model(torch.nn.Module):
             elif True:
                 #? by random 
                 explored_data = self.explored_data.reshape(-1, 8)
-                rand_idx = torch.randperm(explored_data.shape[0])[:5000*64]
+                rand_idx = torch.randperm(explored_data.shape[0])[:500000]
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
             if False:
                 #? by region combination
                 self.active_regions = region_combination[self.frame_idx % len(region_combination)]
                 explored_data = self.explored_data[self.active_regions].reshape(-1, 8)
-                rand_idx = torch.randperm(explored_data.shape[0])[:200000]
+                rand_start_idx = torch.randperm(explored_data.shape[0])[:500000]
+                rand_end_idx = torch.randperm(explored_data.shape[0])[:500000]
+                rand_start_xyz = explored_data[rand_start_idx][:, :3]
+                rand_end_xyz = explored_data[rand_end_idx][:, 3:6]
+                rand_start_speed = explored_data[rand_start_idx][:, 6:7]
+                rand_end_speed = explored_data[rand_end_idx][:, 7:8]
+                frame_data = np.concatenate((rand_start_xyz, rand_end_xyz, rand_start_speed, rand_end_speed), axis=1)
+                frame_data = torch.tensor(frame_data).to(self.Params['Device'])
+
+                rand_idx = torch.randperm(explored_data.shape[0])[:500000]
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
                 self.set_requires_grad(self.active_regions, True)
                 self.set_requires_grad(list(set(self.all_regions)-set(self.active_regions)), False)
@@ -540,8 +566,9 @@ class Model(torch.nn.Module):
 
         #! mix data so that the start and end points are from different frames
         # if is_one_frame:
-        cur_data = self.randomize_data_prev(frame_data)
+        # cur_data = self.randomize_data_prev(frame_data)
         # cur_data = frame_data
+        cur_data = self.randomize_data_cur(frame_data)
         dataloader = FastTensorDataLoader(cur_data, batch_size=int(self.Params['Training']['Batch Size']), shuffle=True)
 
         frame_epoch = epoch
@@ -946,8 +973,8 @@ def main():
     config_path = "configs/cabin.yaml"
     config_path = "configs/maze.yaml"
     config_path = "configs/ruiqi.yaml"
-    config_path = "configs/cube_passage.yaml"
     config_path = "configs/mesh.yaml"
+    config_path = "configs/cube_passage.yaml"
     model    = Model(modelPath, config_path, device='cuda:0')
     model.train()
 
