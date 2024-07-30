@@ -18,6 +18,8 @@ from torch import Tensor
 from models import NN_0624 as NN
 from torch.utils.tensorboard import SummaryWriter
 import time
+import torch.profiler
+from torch.profiler import profile, record_function, ProfilerActivity
 
 
 class FastTensorDataLoader:
@@ -65,6 +67,38 @@ class FastTensorDataLoader:
     def __len__(self):
         return self.n_batches
 
+class ConditionalProfiler:
+    def __init__(self, enabled=True, profile_dir='./log_dir', max_steps=None):
+        self.enabled = enabled
+        self.profile_dir = profile_dir
+        self.max_steps = max_steps
+        self.step_count = 0
+        self.profiler = None
+
+    def __enter__(self):
+        if self.enabled:
+            self.profiler = profile(
+                activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(self.profile_dir),
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=True
+            )
+            self.profiler.__enter__()  # Start profiling
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.enabled and self.profiler:
+            self.profiler.__exit__(exc_type, exc_val, exc_tb)
+            # self.profiler.export_chrome_trace(f"{self.profile_dir}/trace.json")
+
+    def step(self):
+        if self.enabled and self.profiler:
+            self.profiler.step()
+            self.step_count += 1
+            if self.max_steps and self.step_count >= self.max_steps:
+                self.enabled = False  # Stop profiling after max_steps
+                self.profiler.__exit__(None, None, None)  # Cleanly exit profiler
 
 
 def cosine_2d(xmin, xmax, ymin, ymax, x, y):
@@ -340,6 +374,7 @@ class Model(torch.nn.Module):
         plot_window_2d_normalized(self.regions, self.folder)
         
         self.subnets = torch.nn.ModuleList([SubModel(region, self.config, self.device) for region in self.regions])
+        self.subnets = nn.ModuleList([nn.DataParallel(subnet) for subnet in self.subnets])  # Wrapping in DataParallel
 
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.Params['Training']['Learning Rate'], weight_decay=0.2)
 
@@ -455,14 +490,13 @@ class Model(torch.nn.Module):
 
         return cur_data
 
-
     def region_encode_out(self, x, active_regions):
         #! only normalize active regions
         x = x.clone().detach().requires_grad_(True)
         features, weights = [], []
         for subnet_ind in active_regions:
             subnet = self.subnets[subnet_ind]
-            feature, weight = subnet.out(x)
+            feature, weight = subnet.module.out(x)
             features.append(feature*weight)
             weights.append(weight)
         features = torch.stack(features)
@@ -492,7 +526,7 @@ class Model(torch.nn.Module):
 
     def train(self):
 
-        frame_epoch = 200
+        frame_epoch = 1000
         self.alpha = 1.0
         region_combination = [[0, 1, 2, 3], [3, 4, 5, 6]]
         region_combination = [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]]
@@ -533,6 +567,7 @@ class Model(torch.nn.Module):
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
                 self.set_requires_grad(self.active_regions, True)
                 self.set_requires_grad(list(set(self.all_regions)-set(self.active_regions)), False)
+                self.set_requires_grad(self.all_regions, True)
             total_diff = self.train_core(frame_epoch, frame_data)
 
             # self.plot(self.initial_view, self.epoch, total_diff.item(), self.alpha, cur_data[:, :6].clone().cpu().numpy(), None)
@@ -556,7 +591,7 @@ class Model(torch.nn.Module):
         '''
         torch.save({'epoch': epoch,
                     'model_state_dict': self.subnets.state_dict(),
-                    'B_state_dicts': [subnet.B for subnet in self.subnets],
+                    'B_state_dicts': [subnet.module.B for subnet in self.subnets],
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'train_loss': self.total_train_loss,
                     'val_loss': self.total_val_loss}, '{}/Model_Epoch_{}_ValLoss_{:.6e}.pt'.format(self.folder, str(epoch).zfill(5), val_loss))
@@ -569,8 +604,9 @@ class Model(torch.nn.Module):
         Bs = checkpoint['B_state_dicts']
 
         self.subnets = torch.nn.ModuleList([SubModel(region, self.config, self.device) for region in self.regions])
+        self.subnets = nn.ModuleList([nn.DataParallel(subnet) for subnet in self.subnets])  # Wrapping in DataParallel
         for i, subnet in enumerate(self.subnets):
-            subnet.B = Bs[i]
+            subnet.module.B = Bs[i]
 
         self.subnets.load_state_dict(checkpoint['model_state_dict'], strict=True)
         self.subnets.to(torch.device(self.device))
@@ -605,106 +641,139 @@ class Model(torch.nn.Module):
         dataloader = FastTensorDataLoader(cur_data, batch_size=int(self.Params['Training']['Batch Size']), shuffle=True)
 
         frame_epoch = epoch
-        # start_time = time.time()
-        for e in range(frame_epoch):
-            epoch_start_time = time.time()
-            self.epoch += 1
-            total_train_loss = 0
-            total_diff=0
 
-            # gamma=0.001#max((4000.0-epoch)/4000.0/20,0.001)
-            # mu = 10
+        #! Profiling
+        # # Define the number of steps to profile
+        # profile_steps = 10  # Number of batches to profile
 
-            current_state = pickle.loads(pickle.dumps(self.state_dict()))
-            current_optimizer = pickle.loads(pickle.dumps(self.optimizer.state_dict()))
-            self.prev_state_queue.append(current_state)
-            self.prev_optimizer_queue.append(current_optimizer)
-            if(len(self.prev_state_queue)>5):
-                self.prev_state_queue.pop(0)
-                self.prev_optimizer_queue.pop(0)
-            
-            self.optimizer.param_groups[0]['lr']  = 5e-4
+        # with torch.profiler.profile(
+        #     activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        #     schedule=torch.profiler.schedule(wait=1, warmup=1, active=profile_steps, repeat=1),
+        #     on_trace_ready=torch.profiler.tensorboard_trace_handler(self.folder),
+        #     record_shapes=True,
+        #     profile_memory=True,
+        #     with_stack=True
+        # ) as prof:
 
-
-            prev_diff = current_diff
-            iter=0
-            while True:
+        profile_enabled = False
+        profile_steps = 5 
+        with ConditionalProfiler(profile_enabled, self.folder, profile_steps) as prof:    
+            for e in range(frame_epoch):
+                epoch_start_time = time.time()
+                self.epoch += 1
                 total_train_loss = 0
-                total_diff = 0
-                #for i in range(10):
-                for i, data in enumerate(dataloader, 0):#train_loader_wei,dataloader
-                    #print('----------------- Epoch {} - Batch {} --------------------'.format(epoch,i))
-                    if i>5:
-                        break
-    
-                    data=data[0].to(self.Params['Device'])
-                    #data, indexbatch = data
-                    points = data[:,:2*self.dim]#.float()#.cuda()
-                    speed = data[:,2*self.dim:]#.float()#.cuda()
-                    
-                    speed = speed*speed*(2-speed)*(2-speed)
-                    speed = self.alpha*speed+1-self.alpha
+                total_diff=0
 
+                # gamma=0.001#max((4000.0-epoch)/4000.0/20,0.001)
+                # mu = 10
 
-                    loss_value, loss_n, wv = self.Loss(
-                    points, speed, beta)
-                    loss_value.backward()
-
-                    # Update parameters
-                    self.optimizer.step()
-                    self.optimizer.zero_grad()
-                    
-                    #print('')
-                    #print(loss_value.shape)
-                    total_train_loss += loss_value.clone().detach()
-                    total_diff += loss_n.clone().detach()
-                    #print(t1-t0)
-                    #print('')
-                    #weights[indexbatch] = wv
-                    
-                    del points, speed, loss_value, loss_n, wv#,indexbatch
+                current_state = pickle.loads(pickle.dumps(self.state_dict()))
+                current_optimizer = pickle.loads(pickle.dumps(self.optimizer.state_dict()))
+                self.prev_state_queue.append(current_state)
+                self.prev_optimizer_queue.append(current_optimizer)
+                if(len(self.prev_state_queue)>5):
+                    self.prev_state_queue.pop(0)
+                    self.prev_optimizer_queue.pop(0)
                 
+                self.optimizer.param_groups[0]['lr']  = 5e-4
 
-                total_train_loss /= 5 #dataloader train_loader
-                total_diff /= 5 #dataloader train_loader
 
-                current_diff = total_diff
-                diff_ratio = current_diff/prev_diff
+                prev_diff = current_diff
+                iter=0
+                while True:
+                    total_train_loss = 0
+                    total_diff = 0
+                    #for i in range(10):
+                    for i, data in enumerate(dataloader, 0):#train_loader_wei,dataloader
+                        #print('----------------- Epoch {} - Batch {} --------------------'.format(epoch,i))
+                        if i>5:
+                            break
         
-                if True and (diff_ratio < 3.2 and diff_ratio > 0 or e < 10):#1.5
-                    #self.optimizer.param_groups[0]['lr'] = prev_lr 
-                    break
-                else:
+                        data=data[0].to(self.Params['Device'])
+                        #data, indexbatch = data
+                        points = data[:,:2*self.dim]#.float()#.cuda()
+                        speed = data[:,2*self.dim:]#.float()#.cuda()
+                        
+                        speed = speed*speed*(2-speed)*(2-speed)
+                        speed = self.alpha*speed+1-self.alpha
+
+
+                        # loss_value, loss_n, wv = self.Loss(
+                        # points, speed, beta)
+                        # loss_value.backward()
+                        with record_function("model_inference"):
+                            loss_value, loss_n, wv = self.Loss(
+                        points, speed, beta)
+
+                        with record_function("backward_pass"):
+                            s = time.time()
+                            loss_value.backward()
+                            e = time.time()
+                            print('Backward Time: ', e-s)
+
+                        # Update parameters
+                        self.optimizer.step()
+                        self.optimizer.zero_grad()
+
+                        if profile_enabled:
+                            prof.step()
+
+            
+                        
+                        #print('')
+                        #print(loss_value.shape)
+                        total_train_loss += loss_value.clone().detach()
+                        total_diff += loss_n.clone().detach()
+                        #print(t1-t0)
+                        #print('')
+                        #weights[indexbatch] = wv
+                        
+                        del points, speed, loss_value, loss_n, wv#,indexbatch        
                     
-                    iter+=1
+
+                    total_train_loss /= 5 #dataloader train_loader
+                    total_diff /= 5 #dataloader train_loader
+
+                    current_diff = total_diff
+                    diff_ratio = current_diff/prev_diff
+            
+                    if True and (diff_ratio < 3.2 and diff_ratio > 0 or e < 10):#1.5
+                        #self.optimizer.param_groups[0]['lr'] = prev_lr 
+                        break
+                    else:
+                        
+                        iter+=1
+                        with torch.no_grad():
+                            random_number = random.randint(0, 4)
+                            self.load_state_dict(self.prev_state_queue[random_number], strict=True)
+                            self.optimizer.load_state_dict(self.prev_optimizer_queue[random_number])
+
+                        print("RepeatEpoch = {} -- Loss = {:.4e} -- Alpha = {:.4e}".format(
+                            self.epoch, total_diff, self.alpha))
+                    
+                self.writer.add_scalar('Loss/Train', total_diff.item(), self.epoch)
+                self.writer.add_scalar('Epoch Time', time.time()-epoch_start_time, self.epoch)
+                print("Epoch Time: ", time.time()-epoch_start_time)
+                    
+
+                #'''
+                self.total_train_loss.append(total_train_loss)
+                
+                beta = 1.0/total_diff
+                
+
+                if self.Params['Training']['Use Scheduler (bool)'] == True:
+                    self.scheduler.step(total_train_loss)
+
+                if self.epoch % self.Params['Training']['Print Every * Epoch'] == 0:
                     with torch.no_grad():
-                        random_number = random.randint(0, 4)
-                        self.load_state_dict(self.prev_state_queue[random_number], strict=True)
-                        self.optimizer.load_state_dict(self.prev_optimizer_queue[random_number])
-
-                    print("RepeatEpoch = {} -- Loss = {:.4e} -- Alpha = {:.4e}".format(
-                        self.epoch, total_diff, self.alpha))
+                        print("Epoch = {} -- Loss = {:.4e} -- Alpha = {:.4e}".format(
+                            self.epoch, total_diff.item(), self.alpha))
                 
-            self.writer.add_scalar('Loss/Train', total_diff.item(), self.epoch)
-            self.writer.add_scalar('Epoch Time', time.time()-epoch_start_time, self.epoch)
-                
-
-            #'''
-            self.total_train_loss.append(total_train_loss)
+                if self.epoch % self.Params['Training']['Save Every * Epoch'] == 0:
+                    self.plot(self.initial_view, self.epoch, total_diff.item(), self.alpha, cur_data[:, :6].clone().cpu().numpy(), None)
             
-            beta = 1.0/total_diff
             
-
-            if self.Params['Training']['Use Scheduler (bool)'] == True:
-                self.scheduler.step(total_train_loss)
-
-            if self.epoch % self.Params['Training']['Print Every * Epoch'] == 0:
-                with torch.no_grad():
-                    print("Epoch = {} -- Loss = {:.4e} -- Alpha = {:.4e}".format(
-                        self.epoch, total_diff.item(), self.alpha))
-            
-            if self.epoch % self.Params['Training']['Save Every * Epoch'] == 0:
-                self.plot(self.initial_view, self.epoch, total_diff.item(), self.alpha, cur_data[:, :6].clone().cpu().numpy(), None)
         return total_diff
 
     def TravelTimes(self, Xp):
@@ -783,7 +852,7 @@ class Model(torch.nn.Module):
         end_features = []
         windows = []
         for i, subnet in enumerate(self.subnets):
-            feature, window = subnet.out(x)
+            feature, window = subnet.module.out(x)
             start_features.append(feature[:size, :])
             end_features.append(feature[size:, :])  
             windows.append(window)

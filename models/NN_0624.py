@@ -300,6 +300,8 @@ class NN(nn.Module):
         
         loss = beta*loss_n #+ 1e-4*(reg_tau)
 
+        del points, Yobs, tau, dtau, D, DT0, DT1, S0, S1, Ypred0, Ypred1, sq_Yobs0, sq_Yobs1, l0, l1, loss0, loss1
+
         return loss, loss_n, diff
 
     @staticmethod
