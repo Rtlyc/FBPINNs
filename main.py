@@ -291,6 +291,7 @@ class Model(torch.nn.Module):
         self.region_combination = self.config["region_combination"]
         self.active_regions = self.all_regions
         self.learned_regions = set()
+        self.batch_size = self.config['model']['batch_size']
 
         self.init_network()
         self.load_rawdata()
@@ -418,6 +419,7 @@ class Model(torch.nn.Module):
         return cur_data
 
     def randomize_data_cur(self, frame_data):
+        #! current frame data + random frame_data
         rand_start_idx = torch.randperm(frame_data.shape[0])[:500000]
         rand_end_idx = torch.randperm(frame_data.shape[0])[:500000]
         rand_start_xyz = frame_data[rand_start_idx][:, :3]
@@ -430,6 +432,29 @@ class Model(torch.nn.Module):
         # cur_data = global_data
         cur_data = torch.cat((frame_data, global_data), dim=0)
         return cur_data
+
+    def randomize_region_data_prev(self, frame_data):
+        #! current frame data + previous frame data(current start and previous end) + random frame_data
+        prev_frame_idx = torch.randperm(self.all_framedata.shape[0])[:frame_data.shape[0]]
+        prev_frame = self.all_framedata[prev_frame_idx]
+        prev_frame_points = torch.cat((frame_data[:, :3], prev_frame[:, 3:6]), dim=1)
+        prev_frame_speeds = torch.cat((frame_data[:, 6:7], prev_frame[:, 7:]), dim=1)
+        prev_frame_data = torch.cat((prev_frame_points, prev_frame_speeds), dim=1)
+
+        rand_start_idx = torch.randperm(frame_data.shape[0])
+        rand_end_idx = torch.randperm(frame_data.shape[0])
+        rand_start_xyz = frame_data[rand_start_idx][:, :3]
+        rand_end_xyz = frame_data[rand_end_idx][:, 3:6]
+        rand_start_speed = frame_data[rand_start_idx][:, 6:7]
+        rand_end_speed = frame_data[rand_end_idx][:, 7:8]
+        rand_frame_points = torch.cat((rand_start_xyz, rand_end_xyz), dim=1)
+        rand_frame_speeds = torch.cat((rand_start_speed, rand_end_speed), dim=1)
+        rand_frame_data = torch.cat((rand_frame_points, rand_frame_speeds), dim=1)
+
+        cur_data = torch.cat((frame_data, prev_frame_data, rand_frame_data), dim=0)
+
+        return cur_data
+
 
     def region_encode_out(self, x, active_regions):
         #! only normalize active regions
@@ -467,7 +492,7 @@ class Model(torch.nn.Module):
 
     def train(self):
 
-        frame_epoch = 2000
+        frame_epoch = 200
         self.alpha = 1.0
         region_combination = [[0, 1, 2, 3], [3, 4, 5, 6]]
         region_combination = [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]]
@@ -486,23 +511,23 @@ class Model(torch.nn.Module):
                 #? by frame sequence
                 frame_data = self.explored_data[self.frame_idx]
                 frame_data = torch.tensor(frame_data).to(self.Params['Device'])
-            elif True:
+            elif False:
                 #? by random 
                 explored_data = self.explored_data.reshape(-1, 8)
                 rand_idx = torch.randperm(explored_data.shape[0])[:500000]
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
-            if False:
+            if True:
                 #? by region combination
                 self.active_regions = region_combination[self.frame_idx % len(region_combination)]
                 explored_data = self.explored_data[self.active_regions].reshape(-1, 8)
-                rand_start_idx = torch.randperm(explored_data.shape[0])[:500000]
-                rand_end_idx = torch.randperm(explored_data.shape[0])[:500000]
-                rand_start_xyz = explored_data[rand_start_idx][:, :3]
-                rand_end_xyz = explored_data[rand_end_idx][:, 3:6]
-                rand_start_speed = explored_data[rand_start_idx][:, 6:7]
-                rand_end_speed = explored_data[rand_end_idx][:, 7:8]
-                frame_data = np.concatenate((rand_start_xyz, rand_end_xyz, rand_start_speed, rand_end_speed), axis=1)
-                frame_data = torch.tensor(frame_data).to(self.Params['Device'])
+                # rand_start_idx = torch.randperm(explored_data.shape[0])[:500000]
+                # rand_end_idx = torch.randperm(explored_data.shape[0])[:500000]
+                # rand_start_xyz = explored_data[rand_start_idx][:, :3]
+                # rand_end_xyz = explored_data[rand_end_idx][:, 3:6]
+                # rand_start_speed = explored_data[rand_start_idx][:, 6:7]
+                # rand_end_speed = explored_data[rand_end_idx][:, 7:8]
+                # frame_data = np.concatenate((rand_start_xyz, rand_end_xyz, rand_start_speed, rand_end_speed), axis=1)
+                # frame_data = torch.tensor(frame_data).to(self.Params['Device'])
 
                 rand_idx = torch.randperm(explored_data.shape[0])[:500000]
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
@@ -515,7 +540,7 @@ class Model(torch.nn.Module):
             with torch.no_grad():
                 self.save(epoch=self.epoch, val_loss=total_diff)
 
-            # self.learned_regions.update(self.active_regions)
+            self.learned_regions.update(self.active_regions)
             # self.learned_regions = set([self.active_regions[-1]])
             # self.learned_regions = set(self.all_regions)
 
@@ -557,10 +582,15 @@ class Model(torch.nn.Module):
         prev_diff = 1.0
         current_diff = 10.0
         step = -1000.0/4000.0
+        # if self.all_framedata is None:
+        #     self.all_framedata = frame_data.unsqueeze(0)
+        # else:
+        #     self.all_framedata = torch.cat((self.all_framedata, frame_data.unsqueeze(0)), dim=0)
+
         if self.all_framedata is None:
-            self.all_framedata = frame_data.unsqueeze(0)
+            self.all_framedata = frame_data
         else:
-            self.all_framedata = torch.cat((self.all_framedata, frame_data.unsqueeze(0)), dim=0)
+            self.all_framedata = torch.cat((self.all_framedata, frame_data), dim=0)
         # print(self.all_framedata.shape)
 
 
@@ -568,7 +598,10 @@ class Model(torch.nn.Module):
         # if is_one_frame:
         # cur_data = self.randomize_data_prev(frame_data)
         # cur_data = frame_data
-        cur_data = self.randomize_data_cur(frame_data)
+        # cur_data = self.randomize_data_cur(frame_data)
+        cur_data = self.randomize_region_data_prev(frame_data)
+        rand_idx = torch.randperm(cur_data.shape[0])[:self.batch_size]
+        cur_data = cur_data[rand_idx]
         dataloader = FastTensorDataLoader(cur_data, batch_size=int(self.Params['Training']['Batch Size']), shuffle=True)
 
         frame_epoch = epoch

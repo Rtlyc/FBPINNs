@@ -260,7 +260,7 @@ if __name__ == '__main__':
         print("points shape: ", points.shape)
         np.save(pointspath, points)
         np.save(speedspath, speeds)
-        if True:
+        if False:
             viz(points, speeds, meshpath=None, scale=scale)
             print()
     # region = [0.5, 3.5, 0.5, 3.5]
