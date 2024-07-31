@@ -206,57 +206,75 @@ class NN(nn.Module):
     #     x = torch.logsumexp(10*x, 1).unsqueeze(1)/10
     #     return x, Xp
 
-    # @staticmethod
-    # def sym_op(model, normalized_features, Xp):
-    #     x0 = normalized_features[:Xp.shape[0],:]#.unsqueeze(1)
-    #     x1 = normalized_features[Xp.shape[0]:,:]#.unsqueeze(1)
-
-    #     scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1) 
-    #     x0 = x0/scale0
-
-    #     scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1) 
-    #     x1 = x1/scale1
-
-    #     x = x0*x1
-
-    #     x = torch.sum(x,dim=1).unsqueeze(1)
-    #     if model.config['model']['sym_div'] == True:
-    #         sym_div_hype = model.config['model']['sym_div_hype']
-    #         x = sym_div_hype * torch.acos(x-0.000001)/(scale0*scale1)
-    #         # x = torch.acos(x-0.000001)
-    #     else:
-    #         sym_mult_hype = model.config['model']['sym_mult_hype']
-    #         x = torch.acos(x-0.000001)*(scale0*scale1)/sym_mult_hype
-    #     # x = 1000*torch.acos(x-0.000001)/(scale0*scale1) #250
-    #     # x = torch.acos(x-0.000001)*(scale0*scale1)/50 #250
-    #     return x, Xp
-
     @staticmethod
     def sym_op(model, normalized_features, Xp):
         x0 = normalized_features[:Xp.shape[0],:]#.unsqueeze(1)
         x1 = normalized_features[Xp.shape[0]:,:]#.unsqueeze(1)
 
-        x = torch.sqrt((x0-x1)**2+1e-6)
-        x = x.view(x.shape[0], -1, 16)
-        x = torch.logsumexp(10*x, -1)
-        # x =  x.unsqueeze(1)
-        x = 0.1 * torch.sum(x, dim=1).unsqueeze(1)
-        #? this const smaller, lighter
 
-        # scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1) 
-        # x0 = x0/scale0
+        sym_op_type = model.config['model']['sym_op_type']
+        if sym_op_type == "Sphere":
+            scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1) 
+            x0 = x0/scale0
 
-        # scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1) 
-        # x1 = x1/scale1
+            scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1) 
+            x1 = x1/scale1
 
-        # x = x0*x1
+            x = x0*x1
 
-        # x = torch.sum(x,dim=1).unsqueeze(1)
-        # sym_div_hype = model.config['model']['sym_div_hype']
-        # x =  torch.acos(x-0.000001)
-        # #! use L1 norm
-        # x = l1_distance(x0, x1)
+            x = torch.sum(x,dim=1).unsqueeze(1)
+            sym_div_hype = model.config['model']['sym_div_hype']
+            x = sym_div_hype * torch.acos(x-0.000001)/(scale0*scale1)
+            # x = torch.acos(x-0.000001)
+        elif sym_op_type == "L1":
+            x = torch.sqrt((x0-x1)**2+1e-6)
+            x = x.view(x.shape[0], -1, 16)
+            x = torch.logsumexp(10*x, -1)
+            # x =  x.unsqueeze(1)
+            x = 0.1 * torch.sum(x, dim=1).unsqueeze(1)
+            #? this const smaller, lighter   
+        else:
+            scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1) 
+            x0 = x0/scale0
+
+            scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1) 
+            x1 = x1/scale1
+
+            x = x0*x1
+
+            x = torch.sum(x,dim=1).unsqueeze(1)
+            sym_mult_hype = model.config['model']['sym_mult_hype']
+            x = torch.acos(x-0.000001)*(scale0*scale1)/sym_mult_hype
+        # x = 1000*torch.acos(x-0.000001)/(scale0*scale1) #250
+        # x = torch.acos(x-0.000001)*(scale0*scale1)/50 #250
         return x, Xp
+
+    # @staticmethod
+    # def sym_op(model, normalized_features, Xp):
+    #     x0 = normalized_features[:Xp.shape[0],:]#.unsqueeze(1)
+    #     x1 = normalized_features[Xp.shape[0]:,:]#.unsqueeze(1)
+
+    #     x = torch.sqrt((x0-x1)**2+1e-6)
+    #     x = x.view(x.shape[0], -1, 16)
+    #     x = torch.logsumexp(10*x, -1)
+    #     # x =  x.unsqueeze(1)
+    #     x = 0.15 * torch.sum(x, dim=1).unsqueeze(1)
+    #     #? this const smaller, lighter
+
+    #     # scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1) 
+    #     # x0 = x0/scale0
+
+    #     # scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1) 
+    #     # x1 = x1/scale1
+
+    #     # x = x0*x1
+
+    #     # x = torch.sum(x,dim=1).unsqueeze(1)
+    #     # sym_div_hype = model.config['model']['sym_div_hype']
+    #     # x =  torch.acos(x-0.000001)
+    #     # #! use L1 norm
+    #     # x = l1_distance(x0, x1)
+    #     return x, Xp
     
     @staticmethod
     def Loss(model, points, Yobs, beta):

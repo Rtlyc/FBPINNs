@@ -526,7 +526,7 @@ class Model(torch.nn.Module):
 
     def train(self):
 
-        frame_epoch = 1000
+        frame_epoch = self.config['model']['frame_epoch']
         self.alpha = 1.0
         region_combination = [[0, 1, 2, 3], [3, 4, 5, 6]]
         region_combination = [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]]
@@ -567,7 +567,7 @@ class Model(torch.nn.Module):
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
                 self.set_requires_grad(self.active_regions, True)
                 self.set_requires_grad(list(set(self.all_regions)-set(self.active_regions)), False)
-                self.set_requires_grad(self.all_regions, True)
+                # self.set_requires_grad(self.all_regions, True)
             total_diff = self.train_core(frame_epoch, frame_data)
 
             # self.plot(self.initial_view, self.epoch, total_diff.item(), self.alpha, cur_data[:, :6].clone().cpu().numpy(), None)
