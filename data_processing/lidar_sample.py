@@ -57,7 +57,15 @@ def get_lidar_data(path="/home/exx/Documents/FBPINNs/b1/haas_first/hass_first_fl
         translation_data = np.array([position_data['x'], position_data['y'], 0])
         pc_local = transform_pc_to_local(pcl, rot_mat)
         pcl_data.append((pc_local,translation_data))
-    return pcl_data
+    pcl_data = np.array(pcl_data, dtype=object)
+    return pcl_data[:, 0], pcl_data[:, 1]
+
+def get_lidar_data2(path="/home/exx/Documents/FBPINNs/b1/haas_first/hass_first_floor"):
+    lidar_path = os.path.join(path, "lidar.npy")
+    positions_path = os.path.join(path, "positions.npy")
+    lidar = np.load(lidar_path, allow_pickle=True)
+    positions = np.load(positions_path)
+    return lidar, positions
 
 
 class LidarDataset(Dataset):
@@ -87,8 +95,8 @@ class LidarDataset(Dataset):
         self.up_vec = np.array([0., 1., 0.])
         # self.dirs_C = transform.ray_dirs_C(1,self.H,self.W,self.fx,self.fy,self.cx,self.cy,self.device,depth_type="z")
         #TODO: add self.dirs_W
-        self.frame_data = get_lidar_data(self.root_dir)
-        self.frame_data = np.array(self.frame_data, dtype=object)
+        self.lidar_data, self.Ts = get_lidar_data2(self.root_dir)
+        # self.frame_data = np.array(self.frame_data, dtype=object)
 
         # self.depthfiles, self.posefiles, self.rgbfiles = data_pc_validate.get_filenames_for_tbot(self.root_dir)
 
@@ -106,7 +114,7 @@ class LidarDataset(Dataset):
         print("dataset length: ", len(self))
 
     def __len__(self):
-        return len(self.frame_data)
+        return len(self.Ts)
     
     def __getitem__(self, idx):
         #! provide depth, depth_dirs, T
@@ -118,8 +126,8 @@ class LidarDataset(Dataset):
         
         # #TODO: change to my own depth file, this depth is local
         # depth = np.load(depth_file)
-        depths = self.frame_data[idx, 0]
-        T = self.frame_data[idx, 1]
+        depths = self.lidar_data[idx]
+        T = self.Ts[idx]
         depth_norms = np.linalg.norm(depths, axis=-1)
         depth_dirs = depths/depth_norms[:, None]
         sample = {"depth": depth_norms, "T": T, "depth_dirs": depth_dirs}
@@ -372,13 +380,14 @@ if __name__ == "__main__":
     #! test the dataset
     root_dir = "/home/exx/Documents/FBPINNs/b1/haas_first/haas_test"
     root_dir = "/home/exx/Documents/FBPINNs/b1/haas_first/hass_first_floor"
+    root_dir = '/home/exx/Documents/FBPINNs/b1/haas'
     config_file = "/home/exx/Documents/FBPINNs/configs/lidar.json"
     dataset = LidarDataset(root_dir, config_file)
     sample = dataset[0]
     print(sample["depth"].shape)
     print(sample["T"].shape)
     print(sample["depth_dirs"].shape)
-    points, speeds, bounds = dataset.get_speeds(range(10), num=20000) 
+    points, speeds, bounds = dataset.get_speeds(range(94), num=20000) 
     viz(points.cpu().numpy(), speeds.cpu().numpy())   
 
 
