@@ -1,0 +1,25 @@
+{
+    "dataset": {
+        "format": "NTFields",
+        "seq_dir": "../../data/nt_depth/",
+        "noisy_depth": 0,
+        "depth_scale": 1.0,
+        "fps": 30,
+        "camera": {
+            "w": 1200,
+            "h": 680,
+            "fx": 340.0,
+            "fy": 340.0,
+            "cx": 600.0,
+            "cy": 340.0
+        }
+    },
+    "sample": {
+        "n_rays": 200,
+        "n_rays_is_kf": 400,
+        "n_strat_samples": 19,
+        "n_surf_samples": 8,
+        "depth_range": [0.15, 3.0], 
+        "dist_behind_surf": 0.1
+    }
+}
