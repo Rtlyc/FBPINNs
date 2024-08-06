@@ -15,11 +15,13 @@
         }
     },
     "sample": {
-        "n_rays": 200,
+        "n_rays": 2000,
         "n_rays_is_kf": 400,
         "n_strat_samples": 19,
         "n_surf_samples": 8,
-        "depth_range": [0.15, 3.0], 
-        "dist_behind_surf": 0.1
+        "depth_range": [0.15, 5.0], 
+        "dist_behind_surf": 0.1,
+        "minimum": 0.05,
+        "maximum": 0.5
     }
 }

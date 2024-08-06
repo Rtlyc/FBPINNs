@@ -7,6 +7,8 @@ from torchvision import transforms
 # from dataprocessing import transform, data_pc_validate
 import matplotlib.pyplot as plt
 import igl
+import sys 
+sys.path.append("/home/exx/Documents/FBPINNs/data_processing/")
 from mesh_sample import viz
 
 PATH = "/home/exx/Documents/FBPINNs/b1/haas_first/hass_first_floor"
@@ -90,6 +92,9 @@ class LidarDataset(Dataset):
         self.n_strat_samples = configs["sample"]["n_strat_samples"]
         self.n_surf_samples = configs["sample"]["n_surf_samples"]
         self.dist_behind_surf = configs["sample"]["dist_behind_surf"]  
+
+        self.minimum = configs["sample"]["minimum"]
+        self.maximum = configs["sample"]["maximum"]
 
 
         self.up_vec = np.array([0., 1., 0.])
@@ -187,6 +192,8 @@ class LidarDataset(Dataset):
         if is_gt_speed: #ground truth
             bounds = self.get_gt_bounds("datasets/igib-seqs/Beechwood_0_int_scene_mesh.obj", pc)
         
+        minimum = self.minimum
+        maximum = self.maximum
         speeds = torch.clip(bounds, minimum, maximum)/maximum
 
         valid_indices = torch.where((speeds <= 1) & (speeds > 0))[0] 
@@ -381,14 +388,17 @@ if __name__ == "__main__":
     root_dir = "/home/exx/Documents/FBPINNs/b1/haas_first/haas_test"
     root_dir = "/home/exx/Documents/FBPINNs/b1/haas_first/hass_first_floor"
     root_dir = '/home/exx/Documents/FBPINNs/b1/haas'
+    root_dir = '/home/exx/Documents/FBPINNs/b1/haas_fine'
     config_file = "/home/exx/Documents/FBPINNs/configs/lidar.json"
     dataset = LidarDataset(root_dir, config_file)
     sample = dataset[0]
     print(sample["depth"].shape)
     print(sample["T"].shape)
     print(sample["depth_dirs"].shape)
-    points, speeds, bounds = dataset.get_speeds(range(94), num=20000) 
-    viz(points.cpu().numpy(), speeds.cpu().numpy())   
+    points, speeds, bounds = dataset.get_speeds(range(133), num=200000) #133
+    plane = [-2.5, 6, -11.5, 1.5]
+    points *= 0.25
+    viz(points.cpu().numpy(), speeds.cpu().numpy(), plane=plane)   
 
 
 

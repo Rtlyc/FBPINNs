@@ -1,15 +1,15 @@
 model:
-  initial_view: [-2.0, 2.0, -0.0]
+  initial_view: [-0.0, 0.0, -0.0]
   normalization: True
   use_lipschitz: True
   use_1DNorm: False
   lip_const: 1.0
   loss_n_hype: -0.1
-  sym_op_type: "L1" # L1, Sphere, 
+  sym_op_type: "Sphere" # L1, Sphere, 
   sym_div_hype: 50
   sym_mult_hype: 50
   layer_sizes: [64, 64, 64, 64, 256]
-  contour_density: 0.1
+  contour_density: 0.5
   batch_size: 200000
   frame_epoch: 3000
 
@@ -76,17 +76,52 @@ model:
 
 
 regions:
-  - [-3.5, 3.5, -3.5, 3.5]
-  # - [-10.5, 10.5, -3.5, 3.5]
+  # - [-2.5, 6, -11.5, 1.5]
+  # - [-10.5, 25.5, -45.5, 2.5]
+
+  
+  # - [-3, 2, -12, -5]
+  # - [-3, 2, -5.5, 1.5]
+  # - [1.5, 6.5, -12, -5]
+  # - [1.5, 6.5, -5.5, 1.5]
+
+  - [-3, 4, -12, -3]
+  - [-3, 4, -8.5, 1.5]
+  - [-0.5, 6.5, -12, -3]
+  - [-0.5, 6.5, -8.5, 1.5]
 
 
 region_combination:
-  - [0]
+  - [0, 1, 2, 3]
+  # - [0, 1]
+
+# data:
+#   center: [7.5, -21.5, 0]
+#   offset: [17.5, 23.5, 3]
+#   limit: [17.5, 23.5, 3]
+#   dim: 3
+#   scaling: 1.0
+#   minimum: 0.1
+#   maximum: 1.0 # 1.0
+#   wallsize: 0.00
+#   sample_num: 500000
+
+# data:
+#   center: [7.5, -21.5, 0]
+#   offset: [17.5, 23.5, 3]
+#   limit: [17.5, 23.5, 3]
+#   dim: 3
+#   scaling: 1.0
+#   minimum: 0.1
+#   maximum: 1.0 # 1.0
+#   wallsize: 0.00
+#   sample_num: 500000
+
 
 data:
-  center: [0, 0, 0]
-  offset: [3, 3, 3]
-  limit: [3.5, 3.5, 3.5]
+  center: [1.75, -5, 0]
+  offset: [4.25, 6.5, 0.5]
+  limit: [4.25, 6.5, 0.5]
   dim: 3
   scaling: 1.0
   minimum: 0.1
@@ -94,8 +129,9 @@ data:
   wallsize: 0.00
   sample_num: 500000
 
+
 paths:
-  name: 'cube_passage'
+  name: 'b1'
   meshpath: './data/cube_passage.obj'
   pointspath: './data/cube_passage_empty_points.npy'
   speedspath: './data/cube_passage_empty_speeds.npy'

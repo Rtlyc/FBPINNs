@@ -125,6 +125,16 @@ def gaussian_2d(xmin, xmax, ymin, ymax, x, y):
     w_y = torch.where((y>=ymin) & (y<=ymax), w_y, torch.tensor(0.00, device=y.device))
     return w_x * w_y
 
+def data_filter_by_regions(frame_data, regions):
+    valid_start_indices = torch.zeros(frame_data.size(0), dtype=torch.bool, device=frame_data.device)
+    valid_end_indices = torch.zeros(frame_data.size(0), dtype=torch.bool, device=frame_data.device)
+    for region in regions:
+        xmin, xmax, ymin, ymax = region
+        valid_start_indices |= (frame_data[:, 0] >= xmin) & (frame_data[:, 0] <= xmax) & (frame_data[:, 1] >= ymin) & (frame_data[:, 1] <= ymax)
+        valid_end_indices |= (frame_data[:, 3] >= xmin) & (frame_data[:, 3] <= xmax) & (frame_data[:, 4] >= ymin) & (frame_data[:, 4] <= ymax)
+    valid_indices = valid_start_indices & valid_end_indices
+    return frame_data[valid_indices]
+
 # def scale_region(region, coord):
 #     # scale the region to -0.5, 0.5
 #     xmin, xmax, ymin, ymax = region
@@ -132,12 +142,9 @@ def gaussian_2d(xmin, xmax, ymin, ymax, x, y):
 
 def plot_window_2d_normalized(regions, savepath):
     # xmin, xmax, ymin, ymax = -0.5, 0.5, -0.5, 0.5
-    xmin, xmax, ymin, ymax = -2.5, 2.5, -2.5, 2.5
-    xmin, xmax, ymin, ymax = -10, 10, -10, 10
-    xmin, xmax, ymin, ymax = -3, 3, -3, 3
-
-
-
+    # xmin, xmax, ymin, ymax = 
+    regions = np.array(regions)
+    xmin, xmax, ymin, ymax = regions[:, 0].min(), regions[:, 1].max(), regions[:, 2].min(), regions[:, 3].max()
     n = 100  # resolution of the grid
     x = torch.linspace(xmin, xmax, n)
     y = torch.linspace(ymin, ymax, n)
@@ -215,7 +222,7 @@ class SubModel(torch.nn.Module):
     
     def encoder_out(self, coords):
         if self.config['model']['normalization']:
-            #!: scale the input to -0.5, 0.5
+            #!: scale the input to -0.5, 0.5 (only for x and y)
             #* (x-xmin)*(1/(xmax-xmin)) - 0.5 = x*(1/(xmax-xmin)) - xmin*(1/(xmax-xmin)) - 0.5
             x_scale = 1 / (self.region[1] - self.region[0])
             y_scale = 1 / (self.region[3] - self.region[2])
@@ -401,7 +408,7 @@ class Model(torch.nn.Module):
             # points = points[~invalid_indices]
             # speeds = speeds[~invalid_indices] 
             self.explored_data = np.concatenate((points, speeds), axis=1)
-        if True:
+        if False:
             allpoints = []
             allspeeds = []
             for i in range(len(self.all_regions)):
@@ -412,6 +419,13 @@ class Model(torch.nn.Module):
             allpoints = np.stack(allpoints)
             allspeeds = np.stack(allspeeds)
             self.explored_data = np.concatenate((allpoints, allspeeds), axis=2)
+        if True: #b1 dataset
+            from data_processing import lidar_sample
+            root_dir = '/home/exx/Documents/FBPINNs/b1/haas_fine'
+            config_file = "/home/exx/Documents/FBPINNs/configs/lidar.json"
+            dataset = lidar_sample.LidarDataset(root_dir, config_file)
+            points, speeds, bounds = dataset.get_speeds(range(133), num=500000)
+            self.explored_data = torch.cat((points, speeds), dim=1)[None,]
         print("explored data shape:", self.explored_data.shape)
 
     def set_requires_grad(self, regions, requires_grad):
@@ -545,12 +559,17 @@ class Model(torch.nn.Module):
                 #? by frame sequence
                 frame_data = self.explored_data[self.frame_idx]
                 frame_data = torch.tensor(frame_data).to(self.Params['Device'])
-            elif False:
+            elif True:
                 #? by random 
                 explored_data = self.explored_data.reshape(-1, 8)
-                rand_idx = torch.randperm(explored_data.shape[0])[:500000]
+                rand_idx = torch.randperm(explored_data.shape[0])[:1000000]
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
-            if True:
+                frame_data[:, :6] *= 0.25
+                # frame_data[:, 2] *= 0.5
+                # frame_data[:, 5] *= 0.5
+                #! filter the data
+                frame_data = data_filter_by_regions(frame_data, self.regions)
+            if False:
                 #? by region combination
                 self.active_regions = region_combination[self.frame_idx % len(region_combination)]
                 explored_data = self.explored_data[self.active_regions].reshape(-1, 8)
@@ -709,7 +728,7 @@ class Model(torch.nn.Module):
                             s = time.time()
                             loss_value.backward()
                             e = time.time()
-                            print('Backward Time: ', e-s)
+                            # print('Backward Time: ', e-s)
 
                         # Update parameters
                         self.optimizer.step()
@@ -753,7 +772,7 @@ class Model(torch.nn.Module):
                     
                 self.writer.add_scalar('Loss/Train', total_diff.item(), self.epoch)
                 self.writer.add_scalar('Epoch Time', time.time()-epoch_start_time, self.epoch)
-                print("Epoch Time: ", time.time()-epoch_start_time)
+                # print("Epoch Time: ", time.time()-epoch_start_time)
                     
 
                 #'''
@@ -894,8 +913,11 @@ class Model(torch.nn.Module):
         # xmin = [-3, -3]
         # xmax = [3, 3]
         offsetxyz = self.config['data']['offset']
-        xmin = [-offsetxyz[0], -offsetxyz[1]]
-        xmax = [offsetxyz[0], offsetxyz[1]]
+        centerxyz = self.config['data']['center']
+        xmin = [centerxyz[0]-offsetxyz[0], centerxyz[1]-offsetxyz[1]]
+        xmax = [ centerxyz[0]+offsetxyz[0], centerxyz[1]+offsetxyz[1]]
+        # xmin = [-offsetxyz[0], -offsetxyz[1]]
+        # xmax = [offsetxyz[0], offsetxyz[1]]
         limit = max(offsetxyz[0], offsetxyz[1])*2
         
         # if self.mode == READ_FROM_TURTLEBOT:
@@ -975,7 +997,7 @@ class Model(torch.nn.Module):
 
         # ax.contour(X,Y,TT,np.arange(0,5,0.01), cmap='bone', linewidths=0.3)#0.25
         contour_density = self.config["model"]["contour_density"]
-        ax.contour(X,Y,TT,np.arange(0,30,contour_density), cmap='bone', linewidths=0.3)#0.25
+        ax.contour(X,Y,TT,np.arange(0,100,contour_density), cmap='bone', linewidths=0.3)#0.25
 
         plt.colorbar(quad1,ax=ax, pad=0.1, label='Predicted Velocity')
         plt.savefig(self.folder+"/plots"+str(epoch)+"_"+str(alpha)+"_"+str(round(total_train_loss,4))+"_0.png",bbox_inches='tight')
@@ -1077,6 +1099,7 @@ def main():
     config_path = "configs/ruiqi.yaml"
     config_path = "configs/mesh.yaml"
     config_path = "configs/cube_passage.yaml"
+    config_path = "configs/b1.yaml"
     model    = Model(modelPath, config_path, device='cuda:0')
     model.train()
 

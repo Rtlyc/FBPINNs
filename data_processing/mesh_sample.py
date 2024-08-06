@@ -4,7 +4,7 @@ import igl
 import matplotlib.pyplot as plt
 import yaml
 
-def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None, scale=1.0):
+def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None, plane=[-5, 5, -5, 5], scale=1.0):
     #! visualize the mesh
     import trimesh
     if True:
@@ -35,7 +35,7 @@ def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None,
             scene.add_geometry([cm_pc])
 
         # Define a plane
-        height = 0.3
+        height = 0
         size = 7
         center = np.array([-5, 0, height])
         plane_vertices =[
@@ -43,6 +43,13 @@ def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None,
             center + np.array([size, -size, 0]),
             center + np.array([size, size, 0]),
             center + np.array([-size, size, 0])
+        ]
+        xmin, xmax, ymin, ymax = plane
+        plane_vertices =[
+            np.array([xmin, ymin, height]),
+            np.array([xmax, ymin, height]),
+            np.array([xmax, ymax, height]),
+            np.array([xmin, ymax, height])
         ]
         plane_faces = [
             [0, 1, 2],
@@ -52,6 +59,7 @@ def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None,
         ]
         plane_mesh = trimesh.Trimesh(plane_vertices, plane_faces, process=False)
         plane_mesh.visual.face_colors = [100, 100, 255, 100]
+        scene.add_geometry([plane_mesh])
 
         # add points cloud
         if True:
@@ -71,7 +79,7 @@ def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None,
                 #     np.outer(end_speeds, [255, 255, 255, 80])).astype(np.uint8)
 
                 point_cloud = trimesh.PointCloud(start_points, start_colors)
-                point_cloud = trimesh.PointCloud(end_points, end_colors)
+                # point_cloud = trimesh.PointCloud(end_points, end_colors)
                 scene.add_geometry([point_cloud])
         
 
