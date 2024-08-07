@@ -1,0 +1,45 @@
+model:
+  initial_view: [-2.5, 2.5, -0.0]
+  normalization: True
+  use_lipschitz: True
+  use_1DNorm: False
+  lip_const: 1.0
+  loss_n_hype: -0.1
+  sym_op_type: "Sphere" # L1, Sphere, 
+  sym_div_hype: 50
+  sym_mult_hype: 50
+  layer_sizes: [64, 64, 64, 64, 256]
+  contour_density: 0.1
+  batch_size: 200000
+  frame_epoch: 3000
+
+
+region:
+  use_predefined: True
+  columns: 3 # x
+  rows: 3 # y
+  boundaries: [-10, 10, -6, 14]
+
+
+  #! Predefined regions
+  regions:
+    - [-3.5, 3.5, -3.5, 3.5]
+
+  region_combination:
+    - [0]
+
+data:
+  center: [0, 0, 0]
+  offset: [3, 3, 3]
+  limit: [3.5, 3.5, 3.5]
+  dim: 3
+  scaling: 1.0
+  minimum: 0.04
+  maximum: 0.4 # 1.0
+  wallsize: 0.00
+  sample_num: 500000
+
+paths:
+  name: 'narrow_cube'
+  meshpath: './data/narrow_cube.obj'
+

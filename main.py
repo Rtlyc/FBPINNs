@@ -140,7 +140,7 @@ def data_filter_by_regions(frame_data, regions):
 #     xmin, xmax, ymin, ymax = region
 #     kx = (xmax - xmin)
 
-def plot_window_2d_normalized(regions, savepath):
+def plot_window_2d_normalized(regions, savepath, columns=3, rows=3):
     # xmin, xmax, ymin, ymax = -0.5, 0.5, -0.5, 0.5
     # xmin, xmax, ymin, ymax = 
     regions = np.array(regions)
@@ -162,14 +162,14 @@ def plot_window_2d_normalized(regions, savepath):
     total_weights = torch.stack(all_weights).sum(dim=0)
 
     # plt.figure(figsize=(12, 10))
-    plt.figure(figsize=(5, 10))
+    plt.figure(figsize=(rows*2, columns*2))
     for i, region in enumerate(regions, 1):
         # Normalize the weights for this region
         normalized_weights = all_weights[i - 1] / total_weights
         # plt.subplot(int(math.sqrt(len(regions))), int(math.sqrt(len(regions))), i)
-        plt.subplot(3, 3, i)
+        plt.subplot(rows, columns, i)
         cp = plt.contourf(xx.numpy(), yy.numpy(), normalized_weights.numpy(), levels=50, cmap='viridis', vmin=0, vmax=1)
-        plt.colorbar(cp, ticks=[0, 1])
+        # plt.colorbar(cp, ticks=[0, 1])
         xmin, xmax, ymin, ymax = region
         plt.title(f'Region {i}: [{xmin},{xmax}] x [{ymin},{ymax}]')
         plt.xlabel('X')
@@ -327,11 +327,10 @@ class Model(torch.nn.Module):
         self.dim = self.config["data"]["dim"]
         self.scale_factor = self.config["data"]["scaling"]
         self.initial_view = Tensor(self.config["model"]["initial_view"])
-        self.all_regions = list(range(len(self.config["regions"])))
+
         self.name = self.config["paths"]["name"]
-        self.region_combination = self.config["region_combination"]
-        self.active_regions = self.all_regions
-        self.learned_regions = set()
+        self.region_combination = self.config['region']["region_combination"]
+
         self.batch_size = self.config['model']['batch_size']
 
         self.init_network()
@@ -340,50 +339,37 @@ class Model(torch.nn.Module):
     def init_network(self):
         #! initialize the network, notice that we need to split the original model into submodels
         #? 2D window
-        width = 5.0
-        height = 5.0
-        rows, cols = 3, 3
-        row_s = width / rows
-        row_s2 = width / rows / 2
-        x_start = -width/2 - row_s2
-        y_start = width/2 + row_s2
-        regions = []
-        for ri in range(rows):
-            for ci in range(cols):
-                x1 = x_start + ci * row_s 
-                x2 = x1 + row_s*2 
-                y1 = y_start - ri * row_s
-                y2 = y1 - row_s*2
-                regions.append((x1, x2, y2, y1))
-        self.regions = regions
+        region_predefined = self.config["region"]["use_predefined"]
+        columns, rows = 3, 3
+        if region_predefined:
+            self.regions = self.config["region"]['regions']
+        else:
+            self.regions = []
+            xmin, xmax, ymin, ymax = self.config["region"]["boundaries"]
+            columns = self.config["region"]["columns"]
+            rows = self.config["region"]["rows"]
 
-        self.regions = [(-5, 5, -15, -5),
-                        (-5, 5, -10, 0),
-                        (-5, 5, -5, 5),
-                        (-5, 5, -0, 10),
-                        (-5, 5, 5, 15),]
-        
-        # self.regions = [(-10.5, 10.5, -10.5, 10.5)]
-        self.regions = [(-5, 5, -5, 5)]
+            width = xmax - xmin
+            height = ymax - ymin
+            half_width = width / (columns-1)
+            column_regions = [(xmin - half_width + i*half_width, xmin + half_width+i*half_width) for i in range(columns)]
+            half_height = height / (rows-1)
+            row_regions = [(ymin - half_height + i*half_height, ymin + half_height+i*half_height) for i in range(rows)]
+            for i in range(rows):
+                for j in range(columns):
+                    region = (column_regions[j][0], column_regions[j][1], row_regions[i][0], row_regions[i][1])
+                    self.regions.append(region)
 
-        self.regions = [(-6, 0, 0, 6),
-                        (-3, 3, 0, 6),
-                        (-0, 6, 0, 6),
-                        (-6, 0, -3, 3),
-                        (-3, 3, -3, 3),
-                        (-0, 6, -3, 3),
-                        (-6, 0, -6, 0),
-                        (-3, 3, -6, 0),
-                        (-0, 6, -6, 0),]
-        
-        self.regions = self.config["regions"]
-
-        plot_window_2d_normalized(self.regions, self.folder)
+        plot_window_2d_normalized(self.regions, self.folder, columns, rows)
         
         self.subnets = torch.nn.ModuleList([SubModel(region, self.config, self.device) for region in self.regions])
         self.subnets = nn.ModuleList([nn.DataParallel(subnet) for subnet in self.subnets])  # Wrapping in DataParallel
 
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.Params['Training']['Learning Rate'], weight_decay=0.2)
+
+        self.all_regions = list(range(len(self.regions)))
+        self.active_regions = self.all_regions
+        self.learned_regions = set()
 
     def load_rawdata(self):
         if False:
@@ -408,7 +394,7 @@ class Model(torch.nn.Module):
             # points = points[~invalid_indices]
             # speeds = speeds[~invalid_indices] 
             self.explored_data = np.concatenate((points, speeds), axis=1)
-        if False:
+        if True:
             allpoints = []
             allspeeds = []
             for i in range(len(self.all_regions)):
@@ -419,7 +405,7 @@ class Model(torch.nn.Module):
             allpoints = np.stack(allpoints)
             allspeeds = np.stack(allspeeds)
             self.explored_data = np.concatenate((allpoints, allspeeds), axis=2)
-        if True: #b1 dataset
+        if False: #b1 dataset
             from data_processing import lidar_sample
             root_dir = '/home/exx/Documents/FBPINNs/b1/haas_fine'
             config_file = "/home/exx/Documents/FBPINNs/configs/lidar.json"
@@ -542,24 +528,14 @@ class Model(torch.nn.Module):
 
         frame_epoch = self.config['model']['frame_epoch']
         self.alpha = 1.0
-        region_combination = [[0, 1, 2, 3], [3, 4, 5, 6]]
-        region_combination = [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]]
-        region_combination = [[0, 1, 2, 3], [0, 1, 2, 3, 4, 5, 6]]
-        region_combination = [[0], [1], [2], [3], [4], [5], [6]]
-        region_combination = [[0, 1, 2, 3, 4, 5, 6]]
-        # region_combination = [[0, 1, 2, 3], [4, 5, 6]]
-        region_combination = [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6]]
-        region_combination = [[0], [0, 1], [0, 1, 2], [0, 1, 2, 3], [0, 1, 2, 3, 4], [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5, 6]]
-        region_combination = [[0], [0, 1], [0, 1, 2], [0, 1, 2, 3], [0, 1, 2, 3, 4], [0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5, 6], [0, 1, 2, 3, 4, 5, 6, 7], [0, 1, 2, 3, 4, 5, 6, 7], [0, 1, 2, 3, 4, 5, 6, 7], [0, 1, 2, 3, 4, 5, 6, 7]]
-        region_combination = [[0]]
-        # region_combination = [[0, 1, 2, 3]]
+
         region_combination = self.region_combination
         while True:
             if False:
                 #? by frame sequence
                 frame_data = self.explored_data[self.frame_idx]
                 frame_data = torch.tensor(frame_data).to(self.Params['Device'])
-            elif True:
+            elif False:
                 #? by random 
                 explored_data = self.explored_data.reshape(-1, 8)
                 rand_idx = torch.randperm(explored_data.shape[0])[:1000000]
@@ -569,7 +545,7 @@ class Model(torch.nn.Module):
                 # frame_data[:, 5] *= 0.5
                 #! filter the data
                 frame_data = data_filter_by_regions(frame_data, self.regions)
-            if False:
+            if True:
                 #? by region combination
                 self.active_regions = region_combination[self.frame_idx % len(region_combination)]
                 explored_data = self.explored_data[self.active_regions].reshape(-1, 8)
@@ -1100,6 +1076,8 @@ def main():
     config_path = "configs/mesh.yaml"
     config_path = "configs/cube_passage.yaml"
     config_path = "configs/b1.yaml"
+    config_path = "configs/almena.yaml"
+    config_path = "configs/narrow_cube.yaml"
     model    = Model(modelPath, config_path, device='cuda:0')
     model.train()
 

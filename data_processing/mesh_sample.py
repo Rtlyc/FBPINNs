@@ -4,14 +4,14 @@ import igl
 import matplotlib.pyplot as plt
 import yaml
 
-def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None, plane=[-5, 5, -5, 5], scale=1.0):
+def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None, plane=[-5, 5, -5, 5], height=0.0, scale=1.0, viz_start=True):
     #! visualize the mesh
     import trimesh
     if True:
         scene = trimesh.Scene()
 
         if meshpath:
-            mesh = trimesh.load(meshpath)
+            mesh = trimesh.load_mesh(meshpath)
             matrix = np.eye(4)
             matrix[:3, :3] *= scale
 
@@ -35,15 +35,6 @@ def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None,
             scene.add_geometry([cm_pc])
 
         # Define a plane
-        height = 0
-        size = 7
-        center = np.array([-5, 0, height])
-        plane_vertices =[
-            center + np.array([-size, -size, 0]),
-            center + np.array([size, -size, 0]),
-            center + np.array([size, size, 0]),
-            center + np.array([-size, size, 0])
-        ]
         xmin, xmax, ymin, ymax = plane
         plane_vertices =[
             np.array([xmin, ymin, height]),
@@ -79,7 +70,8 @@ def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None,
                 #     np.outer(end_speeds, [255, 255, 255, 80])).astype(np.uint8)
 
                 point_cloud = trimesh.PointCloud(start_points, start_colors)
-                # point_cloud = trimesh.PointCloud(end_points, end_colors)
+                if not viz_start:
+                    point_cloud = trimesh.PointCloud(end_points, end_colors)
                 scene.add_geometry([point_cloud])
         
 
@@ -223,6 +215,10 @@ if __name__ == '__main__':
     config_path = "configs/ruiqi.yaml"
     config_path = "configs/mesh.yaml"
     config_path = "configs/cube_passage.yaml"
+    config_path = "configs/almena.yaml"
+    config_path = "configs/narrow_cube.yaml"
+
+
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
     center = np.array(config["data"]["center"])
@@ -235,10 +231,30 @@ if __name__ == '__main__':
     sample_number = config["data"]["sample_num"]
     scale = config["data"]["scaling"]
     meshpath = config["paths"]["meshpath"]
-    pointspath = config["paths"]["pointspath"]
-    speedspath = config["paths"]["speedspath"]
+    # pointspath = config["paths"]["pointspath"]
+    # speedspath = config["paths"]["speedspath"]
     name = config["paths"]["name"]
-    regions = config["regions"]
+
+    region_predefined = config["region"]["use_predefined"]
+    columns, rows = 3, 3
+    if region_predefined:
+        regions = config['region']["regions"]
+    else:
+        regions = []
+        xmin, xmax, ymin, ymax = config["region"]["boundaries"]
+        columns = config["region"]["columns"]
+        rows = config["region"]["rows"]
+
+        width = xmax - xmin
+        height = ymax - ymin
+        half_width = width / (columns-1)
+        column_regions = [(xmin - half_width + i*half_width, xmin + half_width+i*half_width) for i in range(columns)]
+        half_height = height / (rows-1)
+        row_regions = [(ymin - half_height + i*half_height, ymin + half_height+i*half_height) for i in range(rows)]
+        for i in range(rows):
+            for j in range(columns):
+                region = (column_regions[j][0], column_regions[j][1], row_regions[i][0], row_regions[i][1])
+                regions.append(region)
 
     if False: #? ground truth points viz
         explored_data = np.load("data/explored_data.npy").reshape(-1, 8)
@@ -268,8 +284,10 @@ if __name__ == '__main__':
         print("points shape: ", points.shape)
         np.save(pointspath, points)
         np.save(speedspath, speeds)
-        if False:
-            viz(points, speeds, meshpath=None, scale=scale)
+        if True:
+            plane = region
+            viz(points, speeds, meshpath=None, scale=scale, plane=plane, height=center[2])
+            viz(points, speeds, meshpath=None, scale=scale, plane=plane, height=center[2], viz_start=False)
             print()
     # region = [0.5, 3.5, 0.5, 3.5]
     # ind = 6
