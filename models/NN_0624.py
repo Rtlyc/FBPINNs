@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch.nn import Linear
 import torch.nn.functional as F
 
+USE_FILTER = False
+
 def lip_norm(w):
     #y = x@w.T+b
     absrowsum = torch.sqrt(torch.sum (  w**2 , dim =1))
@@ -74,17 +76,87 @@ class SubNN(nn.Module):
         return encoder
     
 
-    
+
     @staticmethod
     def encoder_out(submodel, coords):
+        self = submodel
+        use_lip = self.config['model']['use_lipschitz']
+        use_1DNorm = self.config['model']['use_1DNorm']
+        if not USE_FILTER:
+            # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+
+            x0 = coords[:,:self.dim]
+            x1 = coords[:,self.dim:]
+            x = torch.vstack((x0,x1))
+            x = self.input_mapping(x)
+        else:
+            # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+            # x0 = coords[:,:self.dim]
+            # x1 = coords[:,self.dim:]
+            # x = torch.vstack((x0,x1))
+            x = self.input_mapping(coords)
+
+        if use_lip:
+            lip_const = self.config['model']['lip_const']
+            w = self.encoder[0].weight
+            b = self.encoder[0].bias
+
+            #c = self.encoder_lip[0].weight
+            w = lip_norm(w)
+
+            y = x@w.T+b
+            
+            if use_1DNorm:
+                y = y.unsqueeze(1)
+                y = self.norm_layers[0](y)
+                y = y.squeeze(1)
+            x = torch.sin(lip_const*y)
+
+            for ii in range(1,self.nl+1):
+                w = self.encoder[ii].weight
+                b = self.encoder[ii].bias
+
+                #c = self.encoder_lip[ii].weight
+                w = lip_norm(w)
+
+                y = x@w.T+b
+                if use_1DNorm:
+                    y = y.unsqueeze(1)
+                    y = self.norm_layers[ii](y)
+                    y = y.squeeze(1)
+                x  = torch.sin(lip_const*y)
+
+            # x = self.encoder[-1](x)
+        else:
+            x = self.encoder[0](x)
+            if use_1DNorm:
+                x = x.unsqueeze(1)
+                x = self.norm_layers[0](x)
+                x = x.squeeze(1)
+            x = torch.sin(x)
+
+            for ii in range(1,self.nl):
+                # x = torch.sin(self.encoder[ii](x))
+                x = self.encoder[ii](x)
+                if use_1DNorm:
+                    x = x.unsqueeze(1)
+                    x = self.norm_layers[ii](x)
+                    x = x.squeeze(1)
+                x = torch.sin(x)
+
+            x = self.encoder[-1](x)
+        return x, coords
+    
+    @staticmethod
+    def encoder_out_new(submodel, coords):
         self = submodel
         # coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
         use_lip = self.config['model']['use_lipschitz']
         use_1DNorm = self.config['model']['use_1DNorm']
-        x0 = coords[:,:self.dim]
-        x1 = coords[:,self.dim:]
-        x = torch.vstack((x0,x1))
-        x = self.input_mapping(x)
+        # x0 = coords[:,:self.dim]
+        # x1 = coords[:,self.dim:]
+        # x = torch.vstack((x0,x1))
+        x = self.input_mapping(coords)
 
         if use_lip:
             lip_const = self.config['model']['lip_const']

@@ -21,6 +21,9 @@ import time
 import torch.profiler
 from torch.profiler import profile, record_function, ProfilerActivity
 
+import gridmap
+
+USE_FILTER = True
 
 class FastTensorDataLoader:
     """
@@ -171,7 +174,7 @@ def plot_window_2d_normalized(regions, savepath, columns=3, rows=3):
         cp = plt.contourf(xx.numpy(), yy.numpy(), normalized_weights.numpy(), levels=50, cmap='viridis', vmin=0, vmax=1)
         # plt.colorbar(cp, ticks=[0, 1])
         xmin, xmax, ymin, ymax = region
-        plt.title(f'Region {i}: [{xmin},{xmax}] x [{ymin},{ymax}]')
+        # plt.title(f'Region {i}: [{xmin:.3f},{xmax:.3f}] x [{ymin:.3f},{ymax:.3f}]')
         plt.xlabel('X')
         plt.ylabel('Y')
         plt.gca().set_aspect('equal', adjustable='box')
@@ -220,7 +223,7 @@ class SubModel(torch.nn.Module):
             m.weight.data.uniform_(-stdv, stdv)
             m.bias.data.uniform_(-stdv, stdv)
     
-    def encoder_out(self, coords):
+    def encoder_out_new(self, coords):
         if self.config['model']['normalization']:
             #!: scale the input to -0.5, 0.5 (only for x and y)
             #* (x-xmin)*(1/(xmax-xmin)) - 0.5 = x*(1/(xmax-xmin)) - xmin*(1/(xmax-xmin)) - 0.5
@@ -231,33 +234,101 @@ class SubModel(torch.nn.Module):
             scaling_matrix = torch.eye(coords.size(1), device=self.device)  # Identity matrix of appropriate size
             scaling_matrix[0, 0] = x_scale
             scaling_matrix[1, 1] = y_scale
-            scaling_matrix[3, 3] = x_scale
-            scaling_matrix[4, 4] = y_scale
+            # scaling_matrix[3, 3] = x_scale
+            # scaling_matrix[4, 4] = y_scale
 
             # Create offset vectors
             offsets = torch.zeros(coords.size(1), device=self.device)
             offsets[0] = -self.region[0] * x_scale - 0.5
             offsets[1] = -self.region[2] * y_scale - 0.5
-            offsets[3] = -self.region[0] * x_scale - 0.5
-            offsets[4] = -self.region[2] * y_scale - 0.5
+            # offsets[3] = -self.region[0] * x_scale - 0.5
+            # offsets[4] = -self.region[2] * y_scale - 0.5
 
             # Perform the dot product and add the offsets
             scaled_coords = torch.matmul(coords, scaling_matrix) + offsets
             coords = scaled_coords
+        return NN.SubNN.encoder_out_new(self, coords)
+
+    def out_new(self, coords):
+        # ? this should only output encoder features
+        size = coords.shape[0]
+        encoder_output, _ = self.encoder_out_new(coords)
+        # x0 = coords[:,:self.dim]
+        # x1 = coords[:,self.dim:]
+        # x_stack = torch.vstack((x0, x1))
+        # window = cosine_2d(*self.region, x_stack[:, 0, None], x_stack[:, 1, None])
+        # window = gaussian_2d(*self.region, x_stack[:, 0, None], x_stack[:, 1, None])
+        window = gaussian_2d(*self.region, coords[:, 0], coords[:, 1])
+        return encoder_output, window
+
+
+    def encoder_out(self, coords):
+        if not USE_FILTER:
+            if self.config['model']['normalization']:
+                #!: scale the input to -0.5, 0.5 (only for x and y)
+                #* (x-xmin)*(1/(xmax-xmin)) - 0.5 = x*(1/(xmax-xmin)) - xmin*(1/(xmax-xmin)) - 0.5
+                x_scale = 1 / (self.region[1] - self.region[0])
+                y_scale = 1 / (self.region[3] - self.region[2])
+
+                # Create a scaling matrix
+                scaling_matrix = torch.eye(coords.size(1), device=self.device)  # Identity matrix of appropriate size
+                scaling_matrix[0, 0] = x_scale
+                scaling_matrix[1, 1] = y_scale
+                scaling_matrix[3, 3] = x_scale
+                scaling_matrix[4, 4] = y_scale
+
+                # Create offset vectors
+                offsets = torch.zeros(coords.size(1), device=self.device)
+                offsets[0] = -self.region[0] * x_scale - 0.5
+                offsets[1] = -self.region[2] * y_scale - 0.5
+                offsets[3] = -self.region[0] * x_scale - 0.5
+                offsets[4] = -self.region[2] * y_scale - 0.5
+
+                # Perform the dot product and add the offsets
+                scaled_coords = torch.matmul(coords, scaling_matrix) + offsets
+                coords = scaled_coords
+        else:
+            if self.config['model']['normalization']:
+                #!: scale the input to -0.5, 0.5 (only for x and y)
+                #* (x-xmin)*(1/(xmax-xmin)) - 0.5 = x*(1/(xmax-xmin)) - xmin*(1/(xmax-xmin)) - 0.5
+                x_scale = 1 / (self.region[1] - self.region[0])
+                y_scale = 1 / (self.region[3] - self.region[2])
+
+                # Create a scaling matrix
+                scaling_matrix = torch.eye(coords.size(1), device=self.device)  # Identity matrix of appropriate size
+                scaling_matrix[0, 0] = x_scale
+                scaling_matrix[1, 1] = y_scale
+                # scaling_matrix[3, 3] = x_scale
+                # scaling_matrix[4, 4] = y_scale
+
+                # Create offset vectors
+                offsets = torch.zeros(coords.size(1), device=self.device)
+                offsets[0] = -self.region[0] * x_scale - 0.5
+                offsets[1] = -self.region[2] * y_scale - 0.5
+                # offsets[3] = -self.region[0] * x_scale - 0.5
+                # offsets[4] = -self.region[2] * y_scale - 0.5
+
+                # Perform the dot product and add the offsets
+                scaled_coords = torch.matmul(coords, scaling_matrix) + offsets
+                coords = scaled_coords
+        
         return NN.SubNN.encoder_out(self, coords)
     
 
     def out(self, coords):
-        # ? this should only output encoder features
-        size = coords.shape[0]
-        encoder_output, _ = self.encoder_out(coords)
-        x0 = coords[:,:self.dim]
-        x1 = coords[:,self.dim:]
-        x_stack = torch.vstack((x0, x1))
-        # window = cosine_2d(*self.region, x_stack[:, 0, None], x_stack[:, 1, None])
-        window = gaussian_2d(*self.region, x_stack[:, 0, None], x_stack[:, 1, None])
+        if not USE_FILTER:
+            # ? this should only output encoder features
+            size = coords.shape[0]
+            encoder_output, _ = self.encoder_out(coords)
+            x0 = coords[:,:self.dim]
+            x1 = coords[:,self.dim:]
+            x_stack = torch.vstack((x0, x1))
+            # window = cosine_2d(*self.region, x_stack[:, 0, None], x_stack[:, 1, None])
+            window = gaussian_2d(*self.region, x_stack[:, 0, None], x_stack[:, 1, None])
+        else:
+            encoder_output, _ = self.encoder_out(coords)
+            window = gaussian_2d(*self.region, coords[:, 0], coords[:, 1])
         return encoder_output, window
-
 
 """ 
 Model maintains the most original model and feature. We should only care about the new output is composed of the normalized features from all the subnets.
@@ -333,14 +404,20 @@ class Model(torch.nn.Module):
 
         self.batch_size = self.config['model']['batch_size']
 
-        self.init_network()
         self.load_rawdata()
+        self.init_network()
+        print()
 
     def init_network(self):
         #! initialize the network, notice that we need to split the original model into submodels
+
+        #! each region looks like
+        #! |overlap|******core******|overlap|
+
         #? 2D window
         region_predefined = self.config["region"]["use_predefined"]
         columns, rows = 3, 3
+        
         if region_predefined:
             self.regions = self.config["region"]['regions']
         else:
@@ -348,17 +425,30 @@ class Model(torch.nn.Module):
             xmin, xmax, ymin, ymax = self.config["region"]["boundaries"]
             columns = self.config["region"]["columns"]
             rows = self.config["region"]["rows"]
+            overlap_ratio = self.config["region"]["overlap_ratio"]
 
-            width = xmax - xmin
-            height = ymax - ymin
-            half_width = width / (columns-1)
-            column_regions = [(xmin - half_width + i*half_width, xmin + half_width+i*half_width) for i in range(columns)]
-            half_height = height / (rows-1)
-            row_regions = [(ymin - half_height + i*half_height, ymin + half_height+i*half_height) for i in range(rows)]
-            for i in range(rows):
-                for j in range(columns):
-                    region = (column_regions[j][0], column_regions[j][1], row_regions[i][0], row_regions[i][1])
-                    self.regions.append(region)
+            width_total = xmax - xmin
+            height_total = ymax - ymin
+            
+            width_core = width_total / (columns)
+            width_overlap = width_core * overlap_ratio
+            column_regions = [(xmin - width_overlap + i*width_core, xmin + width_core+width_overlap + i*width_core) for i in range(columns)]
+
+            height_core = height_total / (rows)
+            height_overlap = height_core * overlap_ratio
+            row_regions = [(ymin - height_overlap + i*height_core, ymin + height_overlap+height_core + i*height_core) for i in range(rows)]
+
+            # for i in range(rows):
+            #     for j in range(columns):
+            #         region = (column_regions[j][0], column_regions[j][1], row_regions[i][0], row_regions[i][1])
+            #         self.regions.append(region)
+            self.block_idx_to_subnet_idx = 1000*torch.ones((columns, rows), dtype=torch.int32)
+            for i, j in self.occ_grid.valid_blocks_indices:
+                region = (column_regions[i][0], column_regions[i][1], row_regions[j][0], row_regions[j][1])
+                self.regions.append(region)
+                self.block_idx_to_subnet_idx[i, j] = len(self.regions) - 1
+
+
 
         plot_window_2d_normalized(self.regions, self.folder, columns, rows)
         
@@ -380,13 +470,14 @@ class Model(torch.nn.Module):
             points = np.load("data/mesh_points_0.npy")
             speeds = np.load("data/mesh_speeds_0.npy")
             self.explored_data = np.concatenate((points, speeds), axis=1)
-        elif False:
+        elif True:
             # points = np.load("data/cube_passage_points.npy")
             # speeds = np.load("data/cube_passage_speeds.npy")
             # points = np.load("data/cabin_points.npy")
             # speeds = np.load("data/cabin_speeds.npy")
-            points = np.load(self.config["paths"]["pointspath"]).astype(np.float32)
-            speeds = np.load(self.config["paths"]["speedspath"]).astype(np.float32)
+            points = np.load("data/narrow_cube_points.npy").astype(np.float32)
+            speeds = np.load("data/narrow_cube_speeds.npy").astype(np.float32)
+            self.all_bounds = np.load("data/narrow_cube_bounds.npy").astype(np.float32)
             # invalid_indices_0 = (points[:, 0] > -1.0) & (points[:, 0] < 1.0) | (points[:, 1] > 0.0)
             # invalid_indices_1 = (points[:, 3] > -1.0) & (points[:, 3] < 1.0) | (points[:, 4] > 0.0)
             # invalid_indices = np.logical_or(invalid_indices_0, invalid_indices_1)
@@ -394,17 +485,25 @@ class Model(torch.nn.Module):
             # points = points[~invalid_indices]
             # speeds = speeds[~invalid_indices] 
             self.explored_data = np.concatenate((points, speeds), axis=1)
-        if True:
+            self.explored_data = torch.tensor(self.explored_data, device=self.device)
+            self.all_bounds = torch.tensor(self.all_bounds, device=self.device)
+        if False:
             allpoints = []
             allspeeds = []
+            allbounds = []
             for i in range(len(self.all_regions)):
                 points = np.load(f"data/{self.name}_points_{i}.npy").astype(np.float32)
                 speeds = np.load(f"data/{self.name}_speeds_{i}.npy").astype(np.float32)
+                bounds = np.load(f"data/{self.name}_bounds_{i}.npy").astype(np.float32)
                 allpoints.append(points)
                 allspeeds.append(speeds)
+                allbounds.append(bounds)
             allpoints = np.stack(allpoints)
             allspeeds = np.stack(allspeeds)
+            allbounds = np.stack(allbounds)
             self.explored_data = np.concatenate((allpoints, allspeeds), axis=2)
+            self.explored_data = torch.tensor(self.explored_data, device=self.device)
+            self.all_bounds = torch.tensor(allbounds, device=self.device)
         if False: #b1 dataset
             from data_processing import lidar_sample
             root_dir = '/home/exx/Documents/FBPINNs/b1/haas_fine'
@@ -413,6 +512,25 @@ class Model(torch.nn.Module):
             points, speeds, bounds = dataset.get_speeds(range(133), num=500000)
             self.explored_data = torch.cat((points, speeds), dim=1)[None,]
         print("explored data shape:", self.explored_data.shape)
+
+        #! Parameters for the occupancy grid
+        region_bounds = self.config["region"]["boundaries"]
+        length = max(region_bounds[1] - region_bounds[0], region_bounds[3] - region_bounds[2])
+        dim_cells = self.config['occ_map']['dim_cells']
+        occupancy_threshold = self.config["occ_map"]["occ_threshold"]
+        block_columns = self.config["region"]["columns"]
+        block_rows = self.config["region"]["rows"]
+
+        spacing = length / dim_cells
+        offset = length / 2
+        self.occ_grid = gridmap.OccupancyGridMap(np.ones((dim_cells, dim_cells)), cell_size = spacing, occupancy_threshold=occupancy_threshold, offset=offset, block_cols=block_columns, block_rows=block_rows)
+
+
+        end_points = self.explored_data.reshape(-1, 8)[:, 3:5]
+        end_bounds = self.all_bounds.reshape(-1, 2)[:, 1].unsqueeze(1)
+        self.occ_grid.update(self.initial_view.numpy(), end_points, end_bounds)
+        self.occ_grid.plot(self.initial_view, end_points, path=self.folder + "/occ_grid_initial.png")
+        print()
 
     def set_requires_grad(self, regions, requires_grad):
         for region in regions:
@@ -491,20 +609,80 @@ class Model(torch.nn.Module):
         return cur_data
 
     def region_encode_out(self, x, active_regions):
-        #! only normalize active regions
-        x = x.clone().detach().requires_grad_(True)
-        features, weights = [], []
-        for subnet_ind in active_regions:
-            subnet = self.subnets[subnet_ind]
-            feature, weight = subnet.module.out(x)
-            features.append(feature*weight)
-            weights.append(weight)
-        features = torch.stack(features)
-        weights = torch.stack(weights)
-        outputs = torch.sum(features, dim=0)
-        ws = torch.sum(weights, dim=0)
-        normalized_features = outputs/ws
+        # x = Tensor([[-2.5, -2.0, 0, -2.0, -2.0, 0], [-2.5, -2.0, 0, -2.0, -2.0, 0]]).to(self.device)
+        if not USE_FILTER:
+            #! only normalize active regions
+            x = x.clone().detach().requires_grad_(True)
+            s_time = time.time()
+            feature_array, weight_array = [], []
+            for subnet_ind in active_regions:
+                subnet = self.subnets[subnet_ind]
+                feature, weight = subnet.module.out(x)
+                feature_array.append(feature*weight)
+                weight_array.append(weight)
+            feature_array = torch.stack(feature_array)
+            weight_array = torch.stack(weight_array)
+            outputs = torch.sum(feature_array, dim=0)
+            ws = torch.sum(weight_array, dim=0)
+            normalized_features = outputs/ws
+            # print("region encode out time origin:", time.time()-s_time)
+        if USE_FILTER and True:
+            x = x.clone().detach().requires_grad_(True)
+            s_time = time.time()
+            subnet_valid_indices = []
+            x_s = x[:, :3]
+            x_e = x[:, 3:]
+            x2 = torch.vstack((x_s, x_e))
+            region_points_mask = self.occ_grid.get_region_points_mask(x2[:, :2], self.occ_grid.valid_blocks_indices)
+            # region_points_mask = self.occ_grid.get_region_points_mask(end)
+            features = torch.zeros((x2.shape[0], 256), device=x.device)
+            weights = torch.zeros((x2.shape[0], 1), device=x.device)
+            for subnet_ind in active_regions:
+                subnet = self.subnets[subnet_ind]
+                #?: should filter the data and only use the data in the region
+                valid_indices = region_points_mask[subnet_ind]
+                subnet_valid_indices.append(valid_indices)
+                x3 = x2[valid_indices]
+                feature, weight = subnet.module.out_new(x3)
+                features[valid_indices] += feature*(weight.unsqueeze(1)) 
+                weights[valid_indices] += weight.unsqueeze(1)
+                # features.append(feature*weight)
+                # weights.append(weight)
+            # features = torch.stack(features)
+            # weights = torch.stack(weights)
+            # outputs = torch.sum(features, dim=0)
+            normalized_features = features/weights 
+            # print("region encode out time new:", time.time()-s_time)
         return normalized_features, x 
+
+    # def region_encode_out_new(self, x, active_regions):
+    #     #! only normalize active regions
+    #     x = x.clone().detach().requires_grad_(True)
+    #     features, weights = [], []
+    #     subnet_valid_indices = []
+    #     x2 = x.reshape(-1, 3)
+    #     region_points_mask = self.occ_grid.get_region_points_mask(x2[:, :2], self.occ_grid.valid_blocks_indices)
+    #     # region_points_mask = self.occ_grid.get_region_points_mask(end)
+    #     features = torch.zeros((x2.shape[0], 256), device=x.device)
+    #     weights = torch.zeros((x2.shape[0], 1), device=x.device)
+    #     for subnet_ind in active_regions:
+    #         subnet = self.subnets[subnet_ind]
+    #         #TODO: should filter the data and only use the data in the region
+    #         valid_indices = region_points_mask[subnet_ind]
+    #         subnet_valid_indices.append(valid_indices)
+    #         x3 = x2[valid_indices]
+    #         feature, weight = subnet.module.out(x3)
+    #         features[valid_indices] += feature*(weight.unsqueeze(1)) 
+    #         weights[valid_indices] += weight.unsqueeze(1)
+    #         # features.append(feature*weight)
+    #         # weights.append(weight)
+    #     # features = torch.stack(features)
+    #     # weights = torch.stack(weights)
+    #     # outputs = torch.sum(features, dim=0)
+    #     normalized_features = features/weights 
+    #     # ws = torch.sum(weights, dim=0)
+    #     # normalized_features = outputs/ws
+    #     return normalized_features, x 
     
     def sym_op(self, normalized_features, Xp):
         return NN.NN.sym_op(self, normalized_features, Xp)
@@ -535,17 +713,17 @@ class Model(torch.nn.Module):
                 #? by frame sequence
                 frame_data = self.explored_data[self.frame_idx]
                 frame_data = torch.tensor(frame_data).to(self.Params['Device'])
-            elif False:
+            elif True:
                 #? by random 
                 explored_data = self.explored_data.reshape(-1, 8)
                 rand_idx = torch.randperm(explored_data.shape[0])[:1000000]
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
-                frame_data[:, :6] *= 0.25
+                # frame_data[:, :6] *= 0.25
                 # frame_data[:, 2] *= 0.5
                 # frame_data[:, 5] *= 0.5
                 #! filter the data
-                frame_data = data_filter_by_regions(frame_data, self.regions)
-            if True:
+                # frame_data = data_filter_by_regions(frame_data, self.regions)
+            if False:
                 #? by region combination
                 self.active_regions = region_combination[self.frame_idx % len(region_combination)]
                 explored_data = self.explored_data[self.active_regions].reshape(-1, 8)
@@ -633,7 +811,7 @@ class Model(torch.nn.Module):
         cur_data = self.randomize_region_data_prev(frame_data)
         rand_idx = torch.randperm(cur_data.shape[0])[:self.batch_size]
         cur_data = cur_data[rand_idx]
-        dataloader = FastTensorDataLoader(cur_data, batch_size=int(self.Params['Training']['Batch Size']), shuffle=True)
+        dataloader = FastTensorDataLoader(cur_data, batch_size=int(self.Params['Training']['Batch Size'])*len(self.regions), shuffle=True)
 
         frame_epoch = epoch
 
@@ -996,7 +1174,7 @@ class Model(torch.nn.Module):
 
 
         #?add four subregion encoder + generator
-        if True:
+        if False:
             # Calculate the sum of all weights
             #? pure subnets output
             # weighted_outputs = self.plot_out(XP)
@@ -1005,12 +1183,14 @@ class Model(torch.nn.Module):
 
             plt.figure(figsize=(12, 10))
             #! loop over the subnets
+            cols = self.config["region"]["columns"]
+            rows = self.config["region"]["rows"]
             for i, region in enumerate(self.regions, 1):
                 weighted_output = weighted_outputs[i - 1].to('cpu').data.reshape(X.shape)
                 # change nan to 0
                 # weighted_output = torch.where(torch.isnan(weighted_output), torch.zeros_like(weighted_output), weighted_output) 
 
-                plt.subplot(3, 3, i)
+                plt.subplot(cols, rows, i)
                 plt.gca().set_aspect('equal', adjustable='box')
                 quad1 = plt.pcolormesh(X, Y, weighted_output.numpy(), vmin=0, vmax=1)
                 plt.colorbar(quad1, pad=0.1, label=f'Subnet Output {i}')

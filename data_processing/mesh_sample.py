@@ -132,10 +132,10 @@ def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None
     PointsInsidez = (pc1[:,2] <= center[2]+limitxyz[2]) & (pc1[:,2] >= center[2]-limitxyz[2])
     PointsInside = PointsInsidex & PointsInsidey & PointsInsidez
     #! only for cube_passage
-    if False:
+    if True:
         # PointsInside = PointsInside & (torch.any(abs(pc0) > 1.0, dim=1) & torch.any(abs(pc1) > 1.0, dim=1))
-        invalid_indices_0 = (pc0[:,0]>-1) & (pc0[:,0]<1.0) & (pc0[:,1]>-1.0)
-        invalid_indices_1 = (pc1[:,0]>-1) & (pc1[:,0]<1.0) & (pc1[:,1]>-1.0)
+        invalid_indices_0 = (pc0[:,0]>-2) & (pc0[:,0]<2.0) & (pc0[:,1]>-2.0) & (pc0[:,1]<2.0)
+        invalid_indices_1 = (pc1[:,0]>-2) & (pc1[:,0]<2.0) & (pc1[:,1]>-2.0) & (pc1[:,1]<2.0)
         invalid_indices = invalid_indices_0 | invalid_indices_1
         PointsInside = PointsInside & ~invalid_indices
 
@@ -151,12 +151,12 @@ def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None
 
     device = pc0.device
     x0 = pc0.cpu().numpy()
-    y0 = unsigned_distance_without_bvh(t_obs, x0)
-    y0 = torch.from_numpy(y0).float().to(device).unsqueeze(1)
-    y0 -= wallsize
+    y0_bounds = unsigned_distance_without_bvh(t_obs, x0)
+    y0_bounds -= wallsize
+    y0_bounds = torch.from_numpy(y0_bounds).float().to(device).unsqueeze(1)
     # bounds to speeds
     # speeds = torch.clip(bounds, minimum, maximum)/maximum
-    y0 = torch.clip(y0, minimum, maximum)/maximum
+    y0 = torch.clip(y0_bounds, minimum, maximum)/maximum
 
     valid_indices = torch.where((y0 < 1) & (y0 > 0))[0]
     if num <= len(valid_indices):
@@ -168,16 +168,17 @@ def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None
         start_indices = valid_indices[rand_indices]
 
     x1 = pc1[start_indices].cpu().numpy()
-    y1 = unsigned_distance_without_bvh(t_obs, x1)
-    y1 = torch.from_numpy(y1).float().to(device).unsqueeze(1)
+    y1_bounds = unsigned_distance_without_bvh(t_obs, x1)
+    y1_bounds -= wallsize
+    y1_bounds = torch.from_numpy(y1_bounds).float().to(device).unsqueeze(1)
     # y1 = torch.clip((y1 - minimum) / (maximum - minimum), 0, 1)
-    y1 -= wallsize
-    y1 = torch.clip(y1, minimum, maximum)/maximum
+    y1 = torch.clip(y1_bounds, minimum, maximum)/maximum
 
     x0 = pc0[start_indices]
     x1 = pc1[start_indices]
     x = torch.cat((x0, x1), dim=1)
     y = torch.cat((y0[start_indices], y1), dim=1)
+    z = torch.cat((y0_bounds[start_indices], y1_bounds), dim=1)
 
     # import matplotlib.pyplot as plt
     # plt.scatter(all_bounds, all_speeds)
@@ -188,7 +189,7 @@ def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None
     # plt.hist(temp.cpu().numpy(), bins=100)
     # plt.title("speed distribution")
     # plt.show()
-    return x, y
+    return x, y, z
 
 
 if __name__ == '__main__':
@@ -235,26 +236,33 @@ if __name__ == '__main__':
     # speedspath = config["paths"]["speedspath"]
     name = config["paths"]["name"]
 
+    #? 2D window
     region_predefined = config["region"]["use_predefined"]
     columns, rows = 3, 3
     if region_predefined:
-        regions = config['region']["regions"]
+        regions = config["region"]['regions']
     else:
         regions = []
         xmin, xmax, ymin, ymax = config["region"]["boundaries"]
         columns = config["region"]["columns"]
         rows = config["region"]["rows"]
+        overlap_ratio = config["region"]["overlap_ratio"]
 
-        width = xmax - xmin
-        height = ymax - ymin
-        half_width = width / (columns-1)
-        column_regions = [(xmin - half_width + i*half_width, xmin + half_width+i*half_width) for i in range(columns)]
-        half_height = height / (rows-1)
-        row_regions = [(ymin - half_height + i*half_height, ymin + half_height+i*half_height) for i in range(rows)]
+        width_total = xmax - xmin
+        height_total = ymax - ymin
+        width_core = width_total / (columns)
+        width_overlap = width_core * overlap_ratio
+        column_regions = [(xmin - width_overlap + i*width_core, xmin + width_overlap + i*width_core) for i in range(columns)]
+
+        height_core = height_total / (rows)
+        height_overlap = height_core * overlap_ratio
+        row_regions = [(ymin - height_overlap + i*height_core, ymin + height_overlap + i*height_core) for i in range(rows)]
+
         for i in range(rows):
             for j in range(columns):
                 region = (column_regions[j][0], column_regions[j][1], row_regions[i][0], row_regions[i][1])
                 regions.append(region)
+
 
     if False: #? ground truth points viz
         explored_data = np.load("data/explored_data.npy").reshape(-1, 8)
@@ -278,12 +286,14 @@ if __name__ == '__main__':
     # points = explored_data[:, :6]
     # speeds = explored_data[:, 6:]
     for ind, region in enumerate(regions):
-        points, speeds = uniform_gt_pts_speeds(center, offset, limit, wallsize, meshpath, minimum, maximum, sample_number, scale=scale, region=region)
+        points, speeds, bounds = uniform_gt_pts_speeds(center, offset, limit, wallsize, meshpath, minimum, maximum, sample_number, scale=scale, region=region)
         pointspath = f"data/{name}_points_{ind}.npy"
         speedspath = f"data/{name}_speeds_{ind}.npy"
+        boundspath = f"data/{name}_bounds_{ind}.npy"
         print("points shape: ", points.shape)
         np.save(pointspath, points)
         np.save(speedspath, speeds)
+        np.save(boundspath, bounds)
         if True:
             plane = region
             viz(points, speeds, meshpath=None, scale=scale, plane=plane, height=center[2])

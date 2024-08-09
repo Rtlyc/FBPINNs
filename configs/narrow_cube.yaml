@@ -5,7 +5,7 @@ model:
   use_1DNorm: False
   lip_const: 1.0
   loss_n_hype: -0.1
-  sym_op_type: "Sphere" # L1, Sphere, 
+  sym_op_type: "L1" # L1, Sphere, 
   sym_div_hype: 50
   sym_mult_hype: 50
   layer_sizes: [64, 64, 64, 64, 256]
@@ -15,10 +15,11 @@ model:
 
 
 region:
-  use_predefined: True
-  columns: 3 # x
-  rows: 3 # y
-  boundaries: [-10, 10, -6, 14]
+  use_predefined: False
+  columns: 5 # x
+  rows: 5 # y
+  boundaries: [-3.5, 3.5, -3.5, 3.5]
+  overlap_ratio: 0.25
 
 
   #! Predefined regions
@@ -38,6 +39,11 @@ data:
   maximum: 0.4 # 1.0
   wallsize: 0.00
   sample_num: 500000
+
+occ_map:
+  dim_cells: 100
+  occ_threshold: 0.8 # larger than this value is occupied
+
 
 paths:
   name: 'narrow_cube'
