@@ -305,18 +305,25 @@ class NN(nn.Module):
             # x =  x.unsqueeze(1)
             x = 0.1 * torch.sum(x, dim=1).unsqueeze(1)
             #? this const smaller, lighter   
-        else:
-            scale0 = torch.sqrt(torch.sum (  ( x0**2 ) , dim =1)).unsqueeze(1) 
-            x0 = x0/scale0
-
-            scale1 = torch.sqrt(torch.sum (  ( x1**2 ) , dim =1)).unsqueeze(1) 
-            x1 = x1/scale1
-
-            x = x0*x1
-
-            x = torch.sum(x,dim=1).unsqueeze(1)
-            sym_mult_hype = model.config['model']['sym_mult_hype']
-            x = torch.acos(x-0.000001)*(scale0*scale1)/sym_mult_hype
+        elif sym_op_type == "L2_old":
+            x = torch.sqrt(torch.sum((x0 - x1) ** 2, dim=1) + 1e-6)
+            x = 3 * x.unsqueeze(1)
+        elif sym_op_type == "L2":
+            x = torch.sqrt((x0-x1)**2+1e-6)
+            x = x.view(x.shape[0], -1, 16)
+            # x = torch.sqrt(torch.sum((x0 - x1) ** 2, dim=1) + 1e-6)
+            x = torch.logsumexp(1*x, -1)
+            x = 1 * torch.sum(x, dim=1).unsqueeze(1)
+        elif sym_op_type == "L1_sqrt":
+            # diff = torch.abs(x0 - x1)
+            diff = torch.sqrt((x0-x1)**2+1e-6)
+            x = torch.logsumexp(10*diff, -1)
+            x = 1 * x.unsqueeze(1)
+        elif sym_op_type == "L1_new":
+            diff = torch.abs(x0 - x1)
+            # diff = torch.sqrt((x0-x1)**2+1e-6)
+            x = torch.logsumexp(10*diff, -1)
+            x = 1 * x.unsqueeze(1)
         # x = 1000*torch.acos(x-0.000001)/(scale0*scale1) #250
         # x = torch.acos(x-0.000001)*(scale0*scale1)/50 #250
         return x, Xp

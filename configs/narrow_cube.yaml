@@ -5,7 +5,7 @@ model:
   use_1DNorm: False
   lip_const: 1.0
   loss_n_hype: -0.1
-  sym_op_type: "L1" # L1, Sphere, 
+  sym_op_type: "L2" # L1, Sphere, L2, L1_sqrt, L1_new
   sym_div_hype: 50
   sym_mult_hype: 50
   layer_sizes: [64, 64, 64, 64, 256]
@@ -16,8 +16,8 @@ model:
 
 region:
   use_predefined: False
-  columns: 5 # x
-  rows: 5 # y
+  columns: 2 # x
+  rows: 2 # y
   boundaries: [-3.5, 3.5, -3.5, 3.5]
   overlap_ratio: 0.25
 
@@ -35,8 +35,8 @@ data:
   limit: [3.5, 3.5, 3.5]
   dim: 3
   scaling: 1.0
-  minimum: 0.04
-  maximum: 0.4 # 1.0
+  minimum: 0.02
+  maximum: 0.2 # 1.0
   wallsize: 0.00
   sample_num: 500000
 
