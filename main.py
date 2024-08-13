@@ -413,40 +413,41 @@ class Model(torch.nn.Module):
 
         #! each region looks like
         #! |overlap|******core******|overlap|
+        #TODO: should move the region initialization to gridmap
+        #assume we have region and block_idx_to_subnet_idx
 
         #? 2D window
         region_predefined = self.config["region"]["use_predefined"]
-        columns, rows = 3, 3
+        # columns, rows = 3, 3
+        columns = self.config["region"]["columns"]
+        rows = self.config["region"]["rows"]
         
         if region_predefined:
             self.regions = self.config["region"]['regions']
         else:
-            self.regions = []
-            xmin, xmax, ymin, ymax = self.config["region"]["boundaries"]
-            columns = self.config["region"]["columns"]
-            rows = self.config["region"]["rows"]
-            overlap_ratio = self.config["region"]["overlap_ratio"]
+            self.regions, self.block_idx_to_subnet_idx = self.occ_grid.get_regions()
+            # self.regions = []
+            # xmin, xmax, ymin, ymax = self.config["region"]["boundaries"]
+            # columns = self.config["region"]["columns"]
+            # rows = self.config["region"]["rows"]
+            # overlap_ratio = self.config["region"]["overlap_ratio"]
 
-            width_total = xmax - xmin
-            height_total = ymax - ymin
+            # width_total = xmax - xmin
+            # height_total = ymax - ymin
             
-            width_core = width_total / (columns)
-            width_overlap = width_core * overlap_ratio
-            column_regions = [(xmin - width_overlap + i*width_core, xmin + width_core+width_overlap + i*width_core) for i in range(columns)]
+            # width_core = width_total / (columns)
+            # width_overlap = width_core * overlap_ratio
+            # column_regions = [(xmin - width_overlap + i*width_core, xmin + width_core+width_overlap + i*width_core) for i in range(columns)]
 
-            height_core = height_total / (rows)
-            height_overlap = height_core * overlap_ratio
-            row_regions = [(ymin - height_overlap + i*height_core, ymin + height_overlap+height_core + i*height_core) for i in range(rows)]
+            # height_core = height_total / (rows)
+            # height_overlap = height_core * overlap_ratio
+            # row_regions = [(ymin - height_overlap + i*height_core, ymin + height_overlap+height_core + i*height_core) for i in range(rows)]
 
-            # for i in range(rows):
-            #     for j in range(columns):
-            #         region = (column_regions[j][0], column_regions[j][1], row_regions[i][0], row_regions[i][1])
-            #         self.regions.append(region)
-            self.block_idx_to_subnet_idx = 1000*torch.ones((columns, rows), dtype=torch.int32)
-            for i, j in self.occ_grid.valid_blocks_indices:
-                region = (column_regions[i][0], column_regions[i][1], row_regions[j][0], row_regions[j][1])
-                self.regions.append(region)
-                self.block_idx_to_subnet_idx[i, j] = len(self.regions) - 1
+            # self.block_idx_to_subnet_idx = 1000*torch.ones((columns, rows), dtype=torch.int32)
+            # for i, j in self.occ_grid.valid_blocks_indices:
+            #     region = (column_regions[i][0], column_regions[i][1], row_regions[j][0], row_regions[j][1])
+            #     self.regions.append(region)
+            #     self.block_idx_to_subnet_idx[i, j] = len(self.regions) - 1
 
 
 
@@ -529,7 +530,7 @@ class Model(torch.nn.Module):
         end_points = self.explored_data.reshape(-1, 8)[:, 3:5]
         end_bounds = self.all_bounds.reshape(-1, 2)[:, 1].unsqueeze(1)
         self.occ_grid.update(self.initial_view.numpy(), end_points, end_bounds)
-        self.occ_grid.plot(self.initial_view, end_points, path=self.folder + "/occ_grid_initial.png")
+        self.occ_grid.plot(self.initial_view, end_points, path=self.folder)
         print()
 
     def set_requires_grad(self, regions, requires_grad):
@@ -633,7 +634,7 @@ class Model(torch.nn.Module):
             x_s = x[:, :3]
             x_e = x[:, 3:]
             x2 = torch.vstack((x_s, x_e))
-            region_points_mask = self.occ_grid.get_region_points_mask(x2[:, :2], self.occ_grid.valid_blocks_indices)
+            region_points_mask = self.occ_grid.get_region_points_mask(x2[:, :2])
             # region_points_mask = self.occ_grid.get_region_points_mask(end)
             features = torch.zeros((x2.shape[0], 256), device=x.device)
             weights = torch.zeros((x2.shape[0], 1), device=x.device)
@@ -667,7 +668,7 @@ class Model(torch.nn.Module):
     #     weights = torch.zeros((x2.shape[0], 1), device=x.device)
     #     for subnet_ind in active_regions:
     #         subnet = self.subnets[subnet_ind]
-    #         #TODO: should filter the data and only use the data in the region
+    #         #: should filter the data and only use the data in the region
     #         valid_indices = region_points_mask[subnet_ind]
     #         subnet_valid_indices.append(valid_indices)
     #         x3 = x2[valid_indices]
@@ -998,7 +999,7 @@ class Model(torch.nn.Module):
         return output, x
  
     def plot_out_end_valid(self, x, valid_indices):
-        #TODO: only filter the end points
+        #?: only filter the end points
         x = x.clone().detach().requires_grad_(True)
         features = []
         windows = []
