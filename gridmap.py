@@ -5,6 +5,7 @@ import torch
 import matplotlib.patches as patches
 import os
 
+INVALID_INDEX = 100000
 
 def generate_possible_blocks(valid_indices, block_mapping, col, row):
     R, C = row, col
@@ -15,18 +16,18 @@ def generate_possible_blocks(valid_indices, block_mapping, col, row):
             if [j1, i1] in valid_indices.tolist():
                 for j2 in range(j1, C):
                     for i2 in range(i1, R):
-                        if all((j, i) in valid_indices.tolist() or block_mapping[j, i] != 1000 for j in range(j1, j2+1) for i in range(i1, i2+1)):
+                        if all((j, i) in valid_indices.tolist() or block_mapping[j, i] != INVALID_INDEX for j in range(j1, j2+1) for i in range(i1, i2+1)):
                             blocks.append((j1, i1, j2, i2))
     return blocks
 
-def filter_blocks(blocks, block_mapping):
+def filter_blocks(blocks, block_mapping, occupied_area_threshold=0.25):
     valid_blocks = []
     
     for (j1, i1, j2, i2) in blocks:
         total_cells = (j2 - j1 + 1) * (i2 - i1 + 1)
-        occupied_cells = sum(1 for j in range(j1, j2+1) for i in range(i1, i2+1) if block_mapping[j, i] == 1000)
+        occupied_cells = sum(1 for j in range(j1, j2+1) for i in range(i1, i2+1) if block_mapping[j, i] == INVALID_INDEX)
         
-        if occupied_cells / total_cells <= 0.25:
+        if occupied_cells / total_cells <= occupied_area_threshold:
             valid_blocks.append((j1, i1, j2, i2))
     
     return valid_blocks
@@ -63,7 +64,7 @@ def select_minimum_blocks(valid_blocks, valid_indices):
 
 def blocks_to_regions(minimum_blocks, block_idx_to_subnet_idx, regions):
     subnets = []
-    new_block_idx_to_subnet_idx = torch.ones_like(block_idx_to_subnet_idx) * 1000
+    new_block_idx_to_subnet_idx = torch.ones_like(block_idx_to_subnet_idx) * INVALID_INDEX
     for j1, i1, j2, i2 in minimum_blocks:
         subnet0 = block_idx_to_subnet_idx[j1, i1]
         subnet1 = block_idx_to_subnet_idx[j2, i2]
@@ -79,7 +80,7 @@ def blocks_to_regions(minimum_blocks, block_idx_to_subnet_idx, regions):
 
 
 class OccupancyGridMap:
-    def __init__(self, data_array, cell_size, occupancy_threshold=0.8, offset=0.5, block_cols=4, block_rows=4):
+    def __init__(self, config):
         """
         Creates a grid map
         :param data_array: a 2D array with a value of occupancy per cell (values from 0 - 1)
@@ -87,9 +88,21 @@ class OccupancyGridMap:
         :param occupancy_threshold: A threshold to determine whether a cell is occupied or free.
         A cell is considered occupied if its value >= occupancy_threshold, free otherwise.
         """
+        self.config = config
+        center = self.config["data"]["center"]
+        offset = self.config["data"]["offset"]
+        region_bounds = [center[0]-offset[0], center[0]+offset[0], center[1]-offset[1], center[1]+offset[1]]
+        length = max(region_bounds[1] - region_bounds[0], region_bounds[3] - region_bounds[2])
+        dim_cells = self.config['occ_map']['dim_cells']
+        occupancy_threshold = self.config["occ_map"]["occ_threshold"]
+        block_cols = self.config["region"]["columns"]
+        block_rows = self.config["region"]["rows"]
+        use_merge = self.config["region"]["use_merge"]
 
-        self.data = data_array
-        self.dim_cells = data_array.shape
+        cell_size = length / dim_cells
+        offset = length / 2
+        self.data = numpy.ones((dim_cells, dim_cells))
+        self.dim_cells = self.data.shape
         self.dim_meters = (self.dim_cells[0] * cell_size, self.dim_cells[1] * cell_size)
         self.cell_size = cell_size
         self.occupancy_threshold = occupancy_threshold
@@ -107,9 +120,11 @@ class OccupancyGridMap:
         self.per_col_size = self.per_col_pixels * self.cell_size
         self.per_row_size = self.per_row_pixels * self.cell_size
 
-        self.overlap_ratio = 1/4
-        # self.block_meters = self.cell_size * 4
-        # self.block_stack = []
+        self.overlap_ratio = self.config["region"]["overlap_ratio"]
+
+        self.use_merge = use_merge
+        self.minimum = self.config["occ_map"]["minimum"]
+        self.maximum = self.config["occ_map"]["maximum"]
 
     def save(self, filepath):
         numpy.savez(filepath, data=self.data, visited=self.visited) 
@@ -330,15 +345,6 @@ class OccupancyGridMap:
         curi,curj = self.get_index_from_coordinates(curloc[0],curloc[1])
         print("curij: ", curi, curj)    
         colored_map[curj,curi] = [138/255,43/255,226/255]
-        # targeti,targetj = self.get_index_from_coordinates(targetloc[0],targetloc[1])
-        # print("targetij: ", targeti, targetj)
-        # colored_map[targetj,targeti] = [255/255,20/255,147/255]
-
-        # if True: # plot the centers of the blocks
-        #     centers = self.get_block_centers()
-        #     for center in centers:
-        #         centeri,centerj = self.get_index_from_coordinates(center[0],center[1])
-        #         colored_map[centerj,centeri] = [0,1,1]
 
 
         # Create a new RGBA image to hold the overlay
@@ -348,6 +354,7 @@ class OccupancyGridMap:
         # print("block_stack: ", self.block_stack)
         # print("block_stack_size: ", len(self.block_stack))
         # end_points = torch.tensor([[-3, -2.5]])
+        # end_points = end_points.cpu()
         valid_indices, map_indices = self.filter_points(end_points)
         end_points = end_points[valid_indices]
         mask = self.get_region_points_mask(end_points) #(12, 50000)
@@ -357,12 +364,6 @@ class OccupancyGridMap:
         four_colors = numpy.array([[47, 243, 224, 130], [248, 210, 16, 130], [250, 38, 160, 130], [244, 23, 32, 130]])/255
         overlay[map_indices[:, 1], map_indices[:, 0], :] = four_colors[neighbor_counts[:,]-1] 
         print()
-
-
-
-        # for block_idx in self.valid_blocks_indices:
-        #     col, row = block_idx
-        #     overlay[col*4:(col+1)*4, row*4:(row+1)*4, :] = [0, 1, 0, 0.5]  # Highlighted in green with alpha
 
         # Combine the original colored_map and the overlay
         final_image = colored_map.copy()
@@ -375,31 +376,11 @@ class OccupancyGridMap:
         extent = [0, self.dim_cells[1], 0, self.dim_cells[0]]  # [xmin, xmax, ymin, ymax]
         ax.imshow(final_image, origin=origin, interpolation='none', alpha=alpha, extent=extent)
 
-        # ax.imshow(final_image, origin=origin, interpolation='none', alpha=alpha)
-
         plt.draw()
         if path is not None:
             figpath = os.path.join(path, 'occ_map.png')
             plt.savefig(figpath)
         plt.close()
-
-
-        #! draw the all blocks
-        # colored_map = numpy.empty((*self.dim_cells, 3))
-        # possible_regions = self.get_batch_block_indices(end_points)
-        # origin_regions = possible_regions[:, 0, :].cpu().numpy()
-        # fig, ax = plt.subplots()
-        # # Set the extent of the axes if needed
-        # extent = [0, self.dim_cells[1], 0, self.dim_cells[0]]  # [xmin, xmax, ymin, ymax]
-        # ax.imshow(final_image, origin=origin, interpolation='none', alpha=alpha, extent=extent)
-
-        # ax.imshow(final_image, origin=origin, interpolation='none', alpha=alpha)
-
-        # plt.draw()
-        # if path is not None:
-        #     plt.savefig(path)
-        # plt.close()
-
 
 
         # Initialize a plot
@@ -449,63 +430,48 @@ class OccupancyGridMap:
         indices = self.get_batch_indices(points)
         x_indices = indices[:, 0]
         y_indices = indices[:, 1]
-        block_x_indices = x_indices // self.per_col_pixels
-        block_y_indices = y_indices // self.per_row_pixels
-
-        rest_x_indices = x_indices % self.per_col_pixels
-        rest_y_indices = y_indices % self.per_row_pixels
-        rest_x_indices_percentage = rest_x_indices / self.per_col_pixels
-        rest_y_indices_percentage = rest_y_indices / self.per_row_pixels
-        rest_x_indices_neighbor = rest_x_indices_percentage - 0.5
-        rest_x_indices_neighbor = torch.where(rest_x_indices_neighbor < -0.25, -1, torch.where(rest_x_indices_neighbor > 0.25, 1, 0))
-        rest_y_indices_neighbor = rest_y_indices_percentage - 0.5
-        rest_y_indices_neighbor = torch.where(rest_y_indices_neighbor < -0.25, -1, torch.where(rest_y_indices_neighbor > 0.25, 1, 0))
+        # block_x_indices = x_indices // self.per_col_pixels
+        # block_y_indices = y_indices // self.per_row_pixels
+        block_row_indices = x_indices // self.per_row_pixels
+        block_col_indices = y_indices // self.per_col_pixels
+        rest_row_indices = x_indices % self.per_row_pixels
+        rest_col_indices = y_indices % self.per_col_pixels
+        rest_col_indices_percentage = rest_col_indices / self.per_col_pixels
+        rest_row_indices_percentage = rest_row_indices / self.per_row_pixels
+        rest_col_indices_neighbor = rest_col_indices_percentage - 0.5
+        rest_col_indices_neighbor = torch.where(rest_col_indices_neighbor <= -0.25, -1, torch.where(rest_col_indices_neighbor >= 0.25, 1, 0))
+        rest_row_indices_neighbor = rest_row_indices_percentage - 0.5
+        rest_row_indices_neighbor = torch.where(rest_row_indices_neighbor <= -0.25, -1, torch.where(rest_row_indices_neighbor >= 0.25, 1, 0))
 
         possible_regions = torch.ones((points.shape[0], 4, 2), device=points.device) # (50000, 4, 2)
         possible_regions *= -1
-        possible_regions[:, 0] = torch.stack([block_x_indices, block_y_indices], dim=1)
-        possible_regions[:, 1] = torch.stack([block_x_indices + rest_x_indices_neighbor, block_y_indices], dim=1)
-        possible_regions[:, 2] = torch.stack([block_x_indices, block_y_indices + rest_y_indices_neighbor], dim=1)
-        possible_regions[:, 3] = torch.stack([block_x_indices + rest_x_indices_neighbor, block_y_indices + rest_y_indices_neighbor], dim=1)
+        possible_regions[:, 0] = torch.stack([block_row_indices, block_col_indices], dim=1)
+        possible_regions[:, 1] = torch.stack([block_row_indices + rest_row_indices_neighbor, block_col_indices], dim=1)
+        possible_regions[:, 2] = torch.stack([block_row_indices, block_col_indices + rest_col_indices_neighbor], dim=1)
+        possible_regions[:, 3] = torch.stack([block_row_indices + rest_row_indices_neighbor, block_col_indices + rest_col_indices_neighbor], dim=1)
 
-        #! will return a raw (50000, 4, 2) tensor, need check for out of boundary, also need to check for the valid block stack
-        possible_regions[:, :, 0] = torch.clamp(possible_regions[:, :, 0], 0, self.block_cols-1)
-        possible_regions[:, :, 1] = torch.clamp(possible_regions[:, :, 1], 0, self.block_rows-1)
+        possible_regions[:, :, 0] = torch.clamp(possible_regions[:, :, 0], 0, self.block_rows-1)
+        possible_regions[:, :, 1] = torch.clamp(possible_regions[:, :, 1], 0, self.block_cols-1)
+
         return possible_regions.long()
 
-        # valid_indices = (possible_regions[:, :, 0] < self.block_cells[0]) & (possible_regions[:, :, 0] >= 0) & (possible_regions[:, :, 1] < self.block_cells[1]) & (possible_regions[:, :, 1] >= 0)
-        # return torch.stack([block_x_indices, block_y_indices, rest_x_indices_neighbor, rest_y_indices_neighbor], dim=1)
-
     def get_region_points_mask(self, end_points):
+        # end_points = torch.tensor([[-2.4278, -4.1621, -0.1522]])
         #!: use col, row indicing some array
         possible_regions = self.get_batch_block_indices(end_points)
-        # valid_blocks_indices = torch.tensor(valid_blocks_indices, device=possible_regions.device)
-        # M, N = valid_blocks_indices.shape[0], possible_regions.shape[0]
-        # Expand dimensions for broadcasting
-        # expanded_valid_blocks = valid_blocks_indices.unsqueeze(1).unsqueeze(2).expand(M, N, 4, 2)
-        # expanded_possible_regions = possible_regions.unsqueeze(0).expand(M, N, 4, 2)
-
-        # Compare and check if any of the 4 coordinates match the valid blocks
-        # matches = torch.all(expanded_valid_blocks == expanded_possible_regions, dim=-1)
-
-        # Create mask by checking if there is any match in the 4 coordinates
-        # mask = torch.any(matches, dim=-1)
 
         #! check with self.block_idx_to_subnet_idx
         M = len(self.regions)
         N = possible_regions.shape[0]
-        # expanded_possible_regions = possible_regions.unsqueeze(0).expand(M, N, 4, 2)
-        # expanded_regions = self.block_idx_to_subnet_idx
 
         x_indices = possible_regions[..., 0]
         y_indices = possible_regions[..., 1]
         block_idx_to_subnet_idx = self.block_idx_to_subnet_idx.to(x_indices.device)
-        subnet_indices = block_idx_to_subnet_idx[x_indices, y_indices] #TODO: check the order of x, y
+        subnet_indices = block_idx_to_subnet_idx[y_indices, x_indices] 
         mask = torch.zeros(M, N, dtype=torch.bool, device=subnet_indices.device)
 
         for i in range(M):
             mask[i] = torch.any(subnet_indices == i, dim=1)
-
 
         return mask
 
@@ -537,17 +503,13 @@ class OccupancyGridMap:
             2. Update the occupancy value based on the bounds
         """
         #TODO: May need to consider z value
-        # end_points = frame_points[:, 3:5]
-        # end_bounds = frame_bounds[:, 1:]
-
+        # end_points = end_points.cpu()
         valid_indices, map_indices = self.filter_points(end_points)
-        # invalid_indices = (indices[:, 0] < 0) | (indices[:, 0] >= self.dim_cells[0]) | (indices[:, 1] < 0) | (indices[:, 1] >= self.dim_cells[1])
-        # indices = indices[~invalid_indices]
         end_points = end_points[valid_indices]
         end_bounds = end_bounds[valid_indices]
 
-        minimum = 0.04
-        maximum = 0.4
+        minimum = self.minimum
+        maximum = self.maximum
         end_speeds = torch.clamp(end_bounds, minimum, maximum)/maximum
         end_occupancies = 1 - end_speeds
 
@@ -560,8 +522,6 @@ class OccupancyGridMap:
         blocks = self.data.reshape(self.block_cols, self.per_col_pixels, self.block_rows, self.per_row_pixels)
         pixels_free_rate = ((blocks < self.occupancy_threshold).sum(axis=(1, 3)))/(self.per_col_pixels*self.per_row_pixels)
         self.valid_blocks_indices = numpy.argwhere(pixels_free_rate > 0.2) # (j, i)
-        
-        
 
         #?1. naive algorithm, show all avaliable blocks directly
         self.regions = []
@@ -581,14 +541,16 @@ class OccupancyGridMap:
         height_overlap = height_core * overlap_ratio
         row_regions = [(ymin - height_overlap + i*height_core, ymin + height_overlap+height_core + i*height_core) for i in range(rows)]
 
-        self.block_idx_to_subnet_idx = 1000*torch.ones((columns, rows), dtype=torch.int32)
+        self.block_idx_to_subnet_idx = INVALID_INDEX*torch.ones((columns, rows), dtype=torch.int32)
         for j, i in self.valid_blocks_indices:
-            region = (column_regions[j][0], column_regions[j][1], row_regions[i][0], row_regions[i][1])
+            # region = (column_regions[j][0], column_regions[j][1], row_regions[i][0], row_regions[i][1])
+            region = (row_regions[i][0], row_regions[i][1], column_regions[j][0], column_regions[j][1])
             self.regions.append(region)
             self.block_idx_to_subnet_idx[j, i] = len(self.regions) - 1
+            pass
 
         #?2. some merge algorithm, merge to larger fewer blocks
-        if True:
+        if self.use_merge:
             # Generate all possible blocks considering non-square grid
             possible_blocks = generate_possible_blocks(self.valid_blocks_indices, self.block_idx_to_subnet_idx, self.block_cols, self.block_rows)
 
@@ -600,60 +562,6 @@ class OccupancyGridMap:
             self.regions, self.block_idx_to_subnet_idx = blocks_to_regions(minimum_blocks, self.block_idx_to_subnet_idx, self.regions)
             print()
 
-
-
-
-        # #?: get region points mask
-        # region_points_mask = self.get_region_points_mask(end_points, self.valid_blocks_indices)
-        # print()
-
-
-
-        # for i in range(end_points.shape[0]):
-        #     cur_point = end_points[i]
-        #     cur_bound = end_bounds[i][0]
-
-        #     # Mark the point as visited
-        #     dist = numpy.linalg.norm(cur_point - position)
-        #     if dist > 0.2: # bad visited distance
-        #         if self.is_visited(cur_point[:2]) == 0:
-        #             self.mark_visited(cur_point[:2], 1) # mark as bad visited
-        #     else:
-        #         self.mark_visited(cur_point[:2], 2) # mark as good visited
-
-        #     # Update the occupancy value of the point
-        #     # speeds = torch.clip((bounds - minimum) / (maximum - minimum), 0.1, 1)
-        #     minimum = 0.01 # value we assume to be obstacle
-        #     maximum = 0.1 # value we assume to be free
-        #     occ_val = 1 - numpy.clip((cur_bound - minimum) / (maximum - minimum), 0, 1)
-        #     self.set_data(cur_point[:2], occ_val)
-
-        # #?: Update the block stack, some hardcoding here, need to be tuned
-        # blocks = self.visited.reshape(self.block_cells[0], 4, self.block_cells[1], 4)
-        # pixels_not_well_visited_rate = ((blocks == 1).sum(axis=(1, 3)))/16
-        # indices_not_well_visited = numpy.argwhere(pixels_not_well_visited_rate > 0.25)
-        # # Swap the columns to get indices in [j, i] format
-        # # indices_not_well_visited = indices_not_well_visited[:, [1, 0]]
-        # self.block_stack = indices_not_well_visited.tolist()
-
-    # def get_target_block(self):
-    #     """
-    #     Get the target block to explore.
-    #     :return: the target block
-    #     """
-    #     #?: some hardcoding here, need to be tuned
-    #     if len(self.block_stack) == 0:
-    #         return None
-    #     else:
-    #         cur_block = self.block_stack.pop(0)
-    #         cur_data = self.get_block_data(cur_block)
-    #         while numpy.sum(cur_data == 1)/16 < 0.25:
-    #             if len(self.block_stack) == 0:
-    #                 return None
-    #             else:
-    #                 cur_block = self.block_stack.pop(0)
-    #                 cur_data = self.get_block_data(cur_block)
-    #         return cur_block
 
     def get_regions(self):
         return self.regions, self.block_idx_to_subnet_idx
@@ -694,17 +602,6 @@ class OccupancyGridMap:
         # x = x - self.offset
         # y = y - self.offset
         return math.inf, math.inf
-    
-    # def get_block_centers(self):
-    #     """
-    #     Get the centers of all blocks.
-    #     :return: the centers of all blocks
-    #     """
-    #     centers = []
-    #     for block in self.block_stack:
-            
-    #         centers.append(self.get_block_center(block))
-    #     return numpy.array(centers)
     
     def get_block_centers(self):
         """

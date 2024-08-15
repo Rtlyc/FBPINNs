@@ -323,7 +323,7 @@ class NN(nn.Module):
             diff = torch.abs(x0 - x1)
             # diff = torch.sqrt((x0-x1)**2+1e-6)
             x = torch.logsumexp(10*diff, -1)
-            x = 1 * x.unsqueeze(1)
+            x = 1.5 * x.unsqueeze(1) #1
         # x = 1000*torch.acos(x-0.000001)/(scale0*scale1) #250
         # x = torch.acos(x-0.000001)*(scale0*scale1)/50 #250
         return x, Xp

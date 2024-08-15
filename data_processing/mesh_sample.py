@@ -104,7 +104,7 @@ def unsigned_distance_without_bvh(triangles, query_points):
 
     return unsigned_distance
 
-def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None, minimum=0.07, maximum=0.3, num=10000, scale=1.0, region=None):
+def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None, minimum=0.07, maximum=0.3, num=10000, scale=1.0, region=None, must_inside=True):
     pc0 = torch.rand((num*10, 3))
     random_offsets = 2*torch.rand(num*10, 3)-1
     pc0[:,0] = random_offsets[:,0]*offsetxyz[0]+center[0]
@@ -132,7 +132,7 @@ def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None
     PointsInsidez = (pc1[:,2] <= center[2]+limitxyz[2]) & (pc1[:,2] >= center[2]-limitxyz[2])
     PointsInside = PointsInsidex & PointsInsidey & PointsInsidez
     #! only for cube_passage
-    if True:
+    if False:
         # PointsInside = PointsInside & (torch.any(abs(pc0) > 1.0, dim=1) & torch.any(abs(pc1) > 1.0, dim=1))
         invalid_indices_0 = (pc0[:,0]>-2) & (pc0[:,0]<2.0) & (pc0[:,1]>-2.0) & (pc0[:,1]<2.0)
         invalid_indices_1 = (pc1[:,0]>-2) & (pc1[:,0]<2.0) & (pc1[:,1]>-2.0) & (pc1[:,1]<2.0)
@@ -145,8 +145,14 @@ def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None
     pc0 = pc0[PointsInside]
     pc1 = pc1[PointsInside]
 
+
     v, f = igl.read_triangle_mesh(meshpath)
     v *= scale
+    winding_numbers_0 = igl.winding_number(v, f, pc0.cpu().numpy())
+    winding_numbers_1 = igl.winding_number(v, f, pc1.cpu().numpy())
+    PointsInside = (abs(winding_numbers_0) > 0.1) & (abs(winding_numbers_1) > 0.1)
+    pc0 = pc0[PointsInside]
+    pc1 = pc1[PointsInside]
     t_obs = v[f].reshape(-1, 3)
 
     device = pc0.device
@@ -218,6 +224,7 @@ if __name__ == '__main__':
     config_path = "configs/cube_passage.yaml"
     config_path = "configs/almena.yaml"
     config_path = "configs/narrow_cube.yaml"
+    config_path = "configs/auburn.yaml"
 
 
     with open(config_path, 'r') as file:
@@ -239,7 +246,7 @@ if __name__ == '__main__':
     #? 2D window
     region_predefined = config["region"]["use_predefined"]
     columns, rows = 3, 3
-    if region_predefined:
+    if True:
         regions = config["region"]['regions']
     else:
         regions = []
@@ -286,7 +293,7 @@ if __name__ == '__main__':
     # points = explored_data[:, :6]
     # speeds = explored_data[:, 6:]
     for ind, region in enumerate(regions):
-        points, speeds, bounds = uniform_gt_pts_speeds(center, offset, limit, wallsize, meshpath, minimum, maximum, sample_number, scale=scale, region=region)
+        points, speeds, bounds = uniform_gt_pts_speeds(center, offset, limit, wallsize, meshpath, minimum, maximum, sample_number, scale=scale, region=None)
         pointspath = f"data/{name}_points_{ind}.npy"
         speedspath = f"data/{name}_speeds_{ind}.npy"
         boundspath = f"data/{name}_bounds_{ind}.npy"
@@ -296,8 +303,11 @@ if __name__ == '__main__':
         np.save(boundspath, bounds)
         if True:
             plane = region
+            rand_indices = torch.randint(0, len(points), (10000,))
+            points = points[rand_indices]
+            speeds = speeds[rand_indices]
             viz(points, speeds, meshpath=None, scale=scale, plane=plane, height=center[2])
-            viz(points, speeds, meshpath=None, scale=scale, plane=plane, height=center[2], viz_start=False)
+            viz(points, speeds, meshpath=meshpath, scale=scale, plane=plane, height=center[2], viz_start=False)
             print()
     # region = [0.5, 3.5, 0.5, 3.5]
     # ind = 6

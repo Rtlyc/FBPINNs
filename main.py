@@ -138,10 +138,20 @@ def data_filter_by_regions(frame_data, regions):
     valid_indices = valid_start_indices & valid_end_indices
     return frame_data[valid_indices]
 
-# def scale_region(region, coord):
-#     # scale the region to -0.5, 0.5
-#     xmin, xmax, ymin, ymax = region
-#     kx = (xmax - xmin)
+def save_config(config, directory="configs", filename=None):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    
+    if filename is None:
+        # Create a timestamped filename
+        filename = datetime.now().strftime("%Y%m%d_%H%M%S") + "_config.yaml"
+    
+    filepath = os.path.join(directory, filename)
+    
+    with open(filepath, 'w') as f:
+        yaml.dump(config, f)
+    
+    print(f"Configuration saved to {filepath}")
 
 def plot_window_2d_normalized(regions, savepath, columns=3, rows=3):
     # xmin, xmax, ymin, ymax = -0.5, 0.5, -0.5, 0.5
@@ -165,7 +175,7 @@ def plot_window_2d_normalized(regions, savepath, columns=3, rows=3):
     total_weights = torch.stack(all_weights).sum(dim=0)
 
     # plt.figure(figsize=(12, 10))
-    plt.figure(figsize=(rows*2, columns*2))
+    plt.figure(figsize=(columns*2, rows*2))
     for i, region in enumerate(regions, 1):
         # Normalize the weights for this region
         normalized_weights = all_weights[i - 1] / total_weights
@@ -377,24 +387,17 @@ class Model(torch.nn.Module):
         self.timer = []
         self.frame_buffer_size = 20
         self.camera_steps = 5000//50
-        self.minimum = 0.01 #0.02
-        self.maximum = 0.1  #0.1
         self.all_framedata = None
         self.all_surf_pc = []
         self.free_pc = []
         self.device = device
 
-
-        # self.initial_view = Tensor([-0.3, -0.2, 0])
-        self.initial_view = Tensor([-1.5, -1.0, 0])
-        self.initial_view = Tensor([-0.0, -0.0, 0])
-        self.initial_view = Tensor([-2.0, -0.0, 0])
-        self.initial_view = Tensor([-1.5, 1.0, 0])
-
-
-                #* Load the configuration file
+        #* Load the configuration file
         with open(config_path, 'r') as file:
            self.config = yaml.safe_load(file)
+
+        save_config(self.config, directory=self.folder, filename=f"{self.config['paths']['name']}.yaml")
+        
         self.dim = self.config["data"]["dim"]
         self.scale_factor = self.config["data"]["scaling"]
         self.initial_view = Tensor(self.config["model"]["initial_view"])
@@ -426,28 +429,7 @@ class Model(torch.nn.Module):
             self.regions = self.config["region"]['regions']
         else:
             self.regions, self.block_idx_to_subnet_idx = self.occ_grid.get_regions()
-            # self.regions = []
-            # xmin, xmax, ymin, ymax = self.config["region"]["boundaries"]
-            # columns = self.config["region"]["columns"]
-            # rows = self.config["region"]["rows"]
-            # overlap_ratio = self.config["region"]["overlap_ratio"]
-
-            # width_total = xmax - xmin
-            # height_total = ymax - ymin
             
-            # width_core = width_total / (columns)
-            # width_overlap = width_core * overlap_ratio
-            # column_regions = [(xmin - width_overlap + i*width_core, xmin + width_core+width_overlap + i*width_core) for i in range(columns)]
-
-            # height_core = height_total / (rows)
-            # height_overlap = height_core * overlap_ratio
-            # row_regions = [(ymin - height_overlap + i*height_core, ymin + height_overlap+height_core + i*height_core) for i in range(rows)]
-
-            # self.block_idx_to_subnet_idx = 1000*torch.ones((columns, rows), dtype=torch.int32)
-            # for i, j in self.occ_grid.valid_blocks_indices:
-            #     region = (column_regions[i][0], column_regions[i][1], row_regions[j][0], row_regions[j][1])
-            #     self.regions.append(region)
-            #     self.block_idx_to_subnet_idx[i, j] = len(self.regions) - 1
 
 
 
@@ -476,9 +458,10 @@ class Model(torch.nn.Module):
             # speeds = np.load("data/cube_passage_speeds.npy")
             # points = np.load("data/cabin_points.npy")
             # speeds = np.load("data/cabin_speeds.npy")
-            points = np.load("data/narrow_cube_points_0.npy").astype(np.float32)
-            speeds = np.load("data/narrow_cube_speeds_0.npy").astype(np.float32)
-            self.all_bounds = np.load("data/narrow_cube_bounds_0.npy").astype(np.float32)
+            name = self.config["paths"]["name"]
+            points = np.load(f"data/{name}_points_0.npy").astype(np.float32)
+            speeds = np.load(f"data/{name}_speeds_0.npy").astype(np.float32)
+            self.all_bounds = np.load(f"data/{name}_bounds_0.npy").astype(np.float32)
             # invalid_indices_0 = (points[:, 0] > -1.0) & (points[:, 0] < 1.0) | (points[:, 1] > 0.0)
             # invalid_indices_1 = (points[:, 3] > -1.0) & (points[:, 3] < 1.0) | (points[:, 4] > 0.0)
             # invalid_indices = np.logical_or(invalid_indices_0, invalid_indices_1)
@@ -515,16 +498,7 @@ class Model(torch.nn.Module):
         print("explored data shape:", self.explored_data.shape)
 
         #! Parameters for the occupancy grid
-        region_bounds = self.config["region"]["boundaries"]
-        length = max(region_bounds[1] - region_bounds[0], region_bounds[3] - region_bounds[2])
-        dim_cells = self.config['occ_map']['dim_cells']
-        occupancy_threshold = self.config["occ_map"]["occ_threshold"]
-        block_columns = self.config["region"]["columns"]
-        block_rows = self.config["region"]["rows"]
-
-        spacing = length / dim_cells
-        offset = length / 2
-        self.occ_grid = gridmap.OccupancyGridMap(np.ones((dim_cells, dim_cells)), cell_size = spacing, occupancy_threshold=occupancy_threshold, offset=offset, block_cols=block_columns, block_rows=block_rows)
+        self.occ_grid = gridmap.OccupancyGridMap(self.config)
 
 
         end_points = self.explored_data.reshape(-1, 8)[:, 3:5]
@@ -656,34 +630,6 @@ class Model(torch.nn.Module):
             # print("region encode out time new:", time.time()-s_time)
         return normalized_features, x 
 
-    # def region_encode_out_new(self, x, active_regions):
-    #     #! only normalize active regions
-    #     x = x.clone().detach().requires_grad_(True)
-    #     features, weights = [], []
-    #     subnet_valid_indices = []
-    #     x2 = x.reshape(-1, 3)
-    #     region_points_mask = self.occ_grid.get_region_points_mask(x2[:, :2], self.occ_grid.valid_blocks_indices)
-    #     # region_points_mask = self.occ_grid.get_region_points_mask(end)
-    #     features = torch.zeros((x2.shape[0], 256), device=x.device)
-    #     weights = torch.zeros((x2.shape[0], 1), device=x.device)
-    #     for subnet_ind in active_regions:
-    #         subnet = self.subnets[subnet_ind]
-    #         #: should filter the data and only use the data in the region
-    #         valid_indices = region_points_mask[subnet_ind]
-    #         subnet_valid_indices.append(valid_indices)
-    #         x3 = x2[valid_indices]
-    #         feature, weight = subnet.module.out(x3)
-    #         features[valid_indices] += feature*(weight.unsqueeze(1)) 
-    #         weights[valid_indices] += weight.unsqueeze(1)
-    #         # features.append(feature*weight)
-    #         # weights.append(weight)
-    #     # features = torch.stack(features)
-    #     # weights = torch.stack(weights)
-    #     # outputs = torch.sum(features, dim=0)
-    #     normalized_features = features/weights 
-    #     # ws = torch.sum(weights, dim=0)
-    #     # normalized_features = outputs/ws
-    #     return normalized_features, x 
     
     def sym_op(self, normalized_features, Xp):
         return NN.NN.sym_op(self, normalized_features, Xp)
@@ -719,11 +665,17 @@ class Model(torch.nn.Module):
                 explored_data = self.explored_data.reshape(-1, 8)
                 rand_idx = torch.randperm(explored_data.shape[0])[:1000000]
                 frame_data = torch.tensor(explored_data[rand_idx]).to(self.Params['Device'])
+                #! filter the data
+                # valid_indices, map_indices = self.occ_grid.filter_points(frame_data[:,:2])
+                # frame_data = frame_data[valid_indices]
+                # valid_indices, map_indices = self.occ_grid.filter_points(frame_data[:,3:5])
+                # frame_data = frame_data[valid_indices]
+
                 # frame_data[:, :6] *= 0.25
                 # frame_data[:, 2] *= 0.5
                 # frame_data[:, 5] *= 0.5
                 #! filter the data
-                # frame_data = data_filter_by_regions(frame_data, self.regions)
+                frame_data = data_filter_by_regions(frame_data, self.regions)
             if False:
                 #? by region combination
                 self.active_regions = region_combination[self.frame_idx % len(region_combination)]
@@ -817,18 +769,6 @@ class Model(torch.nn.Module):
         frame_epoch = epoch
 
         #! Profiling
-        # # Define the number of steps to profile
-        # profile_steps = 10  # Number of batches to profile
-
-        # with torch.profiler.profile(
-        #     activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        #     schedule=torch.profiler.schedule(wait=1, warmup=1, active=profile_steps, repeat=1),
-        #     on_trace_ready=torch.profiler.tensorboard_trace_handler(self.folder),
-        #     record_shapes=True,
-        #     profile_memory=True,
-        #     with_stack=True
-        # ) as prof:
-
         profile_enabled = False
         profile_steps = 5 
         with ConditionalProfiler(profile_enabled, self.folder, profile_steps) as prof:    
@@ -1052,33 +992,20 @@ class Model(torch.nn.Module):
         return outputs
 
     def plot(self, src, epoch, total_train_loss, alpha, cur_points=None, camera_matrix=None, traj_list = None):
-        # limit = 1
-        # xmin = [-0.5, -0.5]
-        # xmax = [0.5, 0.5]
-
-        # limit = 5
-        # xmin = [-2.5, -2.5]
-        # xmax = [2.5, 2.5]
-
-        # limit = 20
-        # xmin = [-10, -10]
-        # xmax = [10, 10]
-
-        # limit = 6
-        # xmin = [-3, -3]
-        # xmax = [3, 3]
         offsetxyz = self.config['data']['offset']
         centerxyz = self.config['data']['center']
-        xmin = [centerxyz[0]-offsetxyz[0], centerxyz[1]-offsetxyz[1]]
-        xmax = [ centerxyz[0]+offsetxyz[0], centerxyz[1]+offsetxyz[1]]
+        # xmin = [centerxyz[0]-offsetxyz[0], centerxyz[1]-offsetxyz[1]]
+        # xmax = [ centerxyz[0]+offsetxyz[0], centerxyz[1]+offsetxyz[1]]
         # xmin = [-offsetxyz[0], -offsetxyz[1]]
         # xmax = [offsetxyz[0], offsetxyz[1]]
-        limit = max(offsetxyz[0], offsetxyz[1])*2
-        
+        limit = max(offsetxyz[0], offsetxyz[1])
+        xmin = [centerxyz[0]-limit, centerxyz[1]-limit]
+        xmax = [centerxyz[0]+limit, centerxyz[1]+limit]
+        limit *= 2
         # if self.mode == READ_FROM_TURTLEBOT:
         #     xmin = [-1.5, -1.5]
         #     xmax = [1.5, 1.5]
-        spacing=limit/80.0
+        spacing=limit/160.0
         X,Y      = np.meshgrid(np.arange(xmin[0],xmax[0],spacing),np.arange(xmin[1],xmax[1],spacing))
 
         # Xsrc = [0]*self.dim
@@ -1158,9 +1085,6 @@ class Model(torch.nn.Module):
         plt.savefig(self.folder+"/plots"+str(epoch)+"_"+str(alpha)+"_"+str(round(total_train_loss,4))+"_0.png",bbox_inches='tight')
 
         plt.close(fig)
-            
-
-
 
         if cur_points is not None:
             # print("plot: cur point shape:",cur_points.shape)
@@ -1259,6 +1183,8 @@ def main():
     config_path = "configs/b1.yaml"
     config_path = "configs/almena.yaml"
     config_path = "configs/narrow_cube.yaml"
+    config_path = "configs/auburn.yaml"
+    # config_path = '/home/exx/Documents/FBPINNs/Experiments/08_13_11_06/auburn.yaml'
     model    = Model(modelPath, config_path, device='cuda:0')
     model.train()
 
@@ -1267,7 +1193,9 @@ def eval():
     config_path = "configs/cube_passage.yaml"
     modelpath = "Experiments/07_09_14_02/Model_Epoch_01500_ValLoss_7.895163e-04.pt"
 
+    # model    = Model(modelPath, config_path, device='cpu')
     model    = Model(modelPath, config_path, device='cuda:0')
+
     model.load(modelpath)
     model.plot( Tensor([-2.0, -0.0, 0]), 0, 0, 0, None, None, None)
     model.plot_valid( Tensor([-2.0, -0.0, 0]), [ 0, 2, 3,  5, 6, 7, 8])
