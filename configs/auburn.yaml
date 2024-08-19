@@ -17,8 +17,8 @@ model:
 region:
   use_predefined: False
   use_merge: False
-  columns: 4 # * | * | * | * | *
-  rows: 3 # =
+  columns: 5 # * | * | * | * | *
+  rows: 5 # =
   # boundaries: [-3.5, 3.5, -3.5, 3.5]
   overlap_ratio: 0.25
 
@@ -50,6 +50,7 @@ occ_map:
 
 
 paths:
-  name: 'auburn'
-  meshpath: './data/auburn_scaled_5.obj'
+  name: 'Auburn'
+  folder: './data/gibson'
+
 

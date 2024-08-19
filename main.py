@@ -208,9 +208,9 @@ class SubModel(torch.nn.Module):
         self.B = 0.5*torch.normal(0,1, size=(128,self.dim), device=self.device).T
         # self.b = 10*torch.rand(1, 128)
 
-        self.nl = 4
+        # self.nl = 4
         self.input_size = self.B.shape[1]
-        self.h_size = 64
+        # self.h_size = 64
 
         self.init_network()
         self.apply(self.init_weights)
@@ -349,14 +349,6 @@ class Model(torch.nn.Module):
         self.Params = {}
         self.Params['ModelPath'] = ModelPath
 
-        # self.scale_factor = scale_factor
-        current_time = datetime.utcnow()-timedelta(hours=5)
-        self.folder = self.Params['ModelPath']+"/"+current_time.strftime("%m_%d_%H_%M")
-        self.writer = SummaryWriter(self.folder)
-        if not os.path.exists(self.folder):
-            os.makedirs(self.folder)
-
-
         # Pass the JSON information
         self.Params['Device'] = device
         self.Params['Pytorch Amp (bool)'] = False
@@ -395,9 +387,7 @@ class Model(torch.nn.Module):
         #* Load the configuration file
         with open(config_path, 'r') as file:
            self.config = yaml.safe_load(file)
-
-        save_config(self.config, directory=self.folder, filename=f"{self.config['paths']['name']}.yaml")
-        
+  
         self.dim = self.config["data"]["dim"]
         self.scale_factor = self.config["data"]["scaling"]
         self.initial_view = Tensor(self.config["model"]["initial_view"])
@@ -406,6 +396,7 @@ class Model(torch.nn.Module):
         self.region_combination = self.config['region']["region_combination"]
 
         self.batch_size = self.config['model']['batch_size']
+        self.data_folder = os.path.join(self.config['paths']['folder'], self.name)
 
         self.load_rawdata()
         self.init_network()
@@ -422,21 +413,15 @@ class Model(torch.nn.Module):
         #? 2D window
         region_predefined = self.config["region"]["use_predefined"]
         # columns, rows = 3, 3
-        columns = self.config["region"]["columns"]
-        rows = self.config["region"]["rows"]
         
         if region_predefined:
             self.regions = self.config["region"]['regions']
         else:
             self.regions, self.block_idx_to_subnet_idx = self.occ_grid.get_regions()
             
-
-
-
-        plot_window_2d_normalized(self.regions, self.folder, columns, rows)
         
         self.subnets = torch.nn.ModuleList([SubModel(region, self.config, self.device) for region in self.regions])
-        self.subnets = nn.ModuleList([nn.DataParallel(subnet) for subnet in self.subnets])  # Wrapping in DataParallel
+        # self.subnets = nn.ModuleList([nn.DataParallel(subnet) for subnet in self.subnets])  # Wrapping in DataParallel
 
         self.optimizer = torch.optim.AdamW(self.parameters(), lr=self.Params['Training']['Learning Rate'], weight_decay=0.2)
 
@@ -458,10 +443,9 @@ class Model(torch.nn.Module):
             # speeds = np.load("data/cube_passage_speeds.npy")
             # points = np.load("data/cabin_points.npy")
             # speeds = np.load("data/cabin_speeds.npy")
-            name = self.config["paths"]["name"]
-            points = np.load(f"data/{name}_points_0.npy").astype(np.float32)
-            speeds = np.load(f"data/{name}_speeds_0.npy").astype(np.float32)
-            self.all_bounds = np.load(f"data/{name}_bounds_0.npy").astype(np.float32)
+            points = np.load(os.path.join(self.data_folder, f"{self.name}_points_0.npy")).astype(np.float32)
+            speeds = np.load(os.path.join(self.data_folder, f"{self.name}_speeds_0.npy")).astype(np.float32)
+            self.all_bounds = np.load(os.path.join(self.data_folder, f"{self.name}_bounds_0.npy")).astype(np.float32)
             # invalid_indices_0 = (points[:, 0] > -1.0) & (points[:, 0] < 1.0) | (points[:, 1] > 0.0)
             # invalid_indices_1 = (points[:, 3] > -1.0) & (points[:, 3] < 1.0) | (points[:, 4] > 0.0)
             # invalid_indices = np.logical_or(invalid_indices_0, invalid_indices_1)
@@ -504,7 +488,6 @@ class Model(torch.nn.Module):
         end_points = self.explored_data.reshape(-1, 8)[:, 3:5]
         end_bounds = self.all_bounds.reshape(-1, 2)[:, 1].unsqueeze(1)
         self.occ_grid.update(self.initial_view.numpy(), end_points, end_bounds)
-        self.occ_grid.plot(self.initial_view, end_points, path=self.folder)
         print()
 
     def set_requires_grad(self, regions, requires_grad):
@@ -592,7 +575,8 @@ class Model(torch.nn.Module):
             feature_array, weight_array = [], []
             for subnet_ind in active_regions:
                 subnet = self.subnets[subnet_ind]
-                feature, weight = subnet.module.out(x)
+                # feature, weight = subnet.module.out(x)
+                feature, weight = subnet.out(x)
                 feature_array.append(feature*weight)
                 weight_array.append(weight)
             feature_array = torch.stack(feature_array)
@@ -618,7 +602,8 @@ class Model(torch.nn.Module):
                 valid_indices = region_points_mask[subnet_ind]
                 subnet_valid_indices.append(valid_indices)
                 x3 = x2[valid_indices]
-                feature, weight = subnet.module.out_new(x3)
+                feature, weight = subnet.out_new(x3)
+                # feature, weight = subnet.module.out_new(x3)
                 features[valid_indices] += feature*(weight.unsqueeze(1)) 
                 weights[valid_indices] += weight.unsqueeze(1)
                 # features.append(feature*weight)
@@ -650,6 +635,30 @@ class Model(torch.nn.Module):
         return NN.NN.Loss(self, points, Yobs, beta)
 
     def train(self):
+
+        current_time = datetime.utcnow()-timedelta(hours=4)
+        self.folder = self.Params['ModelPath']+"/"+current_time.strftime("%m_%d_%H_%M")
+        self.writer = SummaryWriter(self.folder)
+        if not os.path.exists(self.folder):
+            os.makedirs(self.folder)
+
+        self.config['paths']['experiment'] = self.folder
+        self.config['region']['regions'] = [list(region) for region in self.regions]
+        save_config(self.config, directory=self.folder, filename=f"{self.config['paths']['name']}.yaml")
+
+        self.occ_grid.plot(self.initial_view, self.explored_data.reshape(-1, 8)[:, 3:5], path=self.folder)
+        columns = self.config["region"]["columns"]
+        rows = self.config["region"]["rows"]
+        plot_window_2d_normalized(self.regions, self.folder, columns, rows)
+
+        self.srcs = self.initial_view.unsqueeze(0)
+        if True:
+            srcs = self.explored_data.reshape(-1, 8)[:, 3:6]
+            free_indices = self.explored_data.reshape(-1, 8)[:, 7] == 1.0
+            free_srcs = srcs[free_indices]
+            rand_idx = torch.randperm(free_srcs.shape[0])[:4]
+            self.srcs = torch.vstack((self.srcs, free_srcs[rand_idx].detach().cpu()))
+
 
         frame_epoch = self.config['model']['frame_epoch']
         self.alpha = 1.0
@@ -694,12 +703,10 @@ class Model(torch.nn.Module):
                 self.set_requires_grad(self.active_regions, True)
                 self.set_requires_grad(list(set(self.all_regions)-set(self.active_regions)), False)
                 # self.set_requires_grad(self.all_regions, True)
+            
             total_diff = self.train_core(frame_epoch, frame_data)
 
             # self.plot(self.initial_view, self.epoch, total_diff.item(), self.alpha, cur_data[:, :6].clone().cpu().numpy(), None)
-
-            with torch.no_grad():
-                self.save(epoch=self.epoch, val_loss=total_diff)
 
             self.learned_regions.update(self.active_regions)
             # self.learned_regions = set([self.active_regions[-1]])
@@ -717,10 +724,17 @@ class Model(torch.nn.Module):
         '''
         torch.save({'epoch': epoch,
                     'model_state_dict': self.subnets.state_dict(),
-                    'B_state_dicts': [subnet.module.B for subnet in self.subnets],
+                    'B_state_dicts': [subnet.B for subnet in self.subnets],
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'train_loss': self.total_train_loss,
                     'val_loss': self.total_val_loss}, '{}/Model_Epoch_{}_ValLoss_{:.6e}.pt'.format(self.folder, str(epoch).zfill(5), val_loss))
+        
+        # torch.save({'epoch': epoch,
+        #     'model_state_dict': self.subnets.state_dict(),
+        #     'B_state_dicts': [subnet.module.B for subnet in self.subnets],
+        #     'optimizer_state_dict': self.optimizer.state_dict(),
+        #     'train_loss': self.total_train_loss,
+        #     'val_loss': self.total_val_loss}, '{}/Model_Epoch_{}_ValLoss_{:.6e}.pt'.format(self.folder, str(epoch).zfill(5), val_loss))
         
     def load(self, filepath):
         #B = torch.load(self.Params['ModelPath']+'/B.pt')
@@ -730,9 +744,10 @@ class Model(torch.nn.Module):
         Bs = checkpoint['B_state_dicts']
 
         self.subnets = torch.nn.ModuleList([SubModel(region, self.config, self.device) for region in self.regions])
-        self.subnets = nn.ModuleList([nn.DataParallel(subnet) for subnet in self.subnets])  # Wrapping in DataParallel
+        # self.subnets = nn.ModuleList([nn.DataParallel(subnet) for subnet in self.subnets])  # Wrapping in DataParallel
         for i, subnet in enumerate(self.subnets):
-            subnet.module.B = Bs[i]
+            subnet.B = Bs[i]
+            # subnet.module.B = Bs[i]
 
         self.subnets.load_state_dict(checkpoint['model_state_dict'], strict=True)
         self.subnets.to(torch.device(self.device))
@@ -885,9 +900,10 @@ class Model(torch.nn.Module):
                             self.epoch, total_diff.item(), self.alpha))
                 
                 if self.epoch % self.Params['Training']['Save Every * Epoch'] == 0:
-                    self.plot(self.initial_view, self.epoch, total_diff.item(), self.alpha, cur_data[:, :6].clone().cpu().numpy(), None)
-            
-            
+                    self.plot(self.epoch, total_diff.item(), self.alpha, cur_data[:, :6].clone().cpu().numpy(), None)
+                    with torch.no_grad():
+                        self.save(epoch=self.epoch, val_loss=total_diff)
+                    
         return total_diff
 
     def TravelTimes(self, Xp):
@@ -900,6 +916,9 @@ class Model(torch.nn.Module):
     def Speed(self, Xp):
         return NN.NN.Speed(self, Xp)
     
+    def Gradient(self, Xp):
+        return NN.NN.Gradient(self, Xp)
+
     def plot_out(self, x):
         x = x.clone().detach().requires_grad_(True)
         features = []
@@ -991,31 +1010,11 @@ class Model(torch.nn.Module):
             outputs.append(output)
         return outputs
 
-    def plot(self, src, epoch, total_train_loss, alpha, cur_points=None, camera_matrix=None, traj_list = None):
-        offsetxyz = self.config['data']['offset']
-        centerxyz = self.config['data']['center']
-        # xmin = [centerxyz[0]-offsetxyz[0], centerxyz[1]-offsetxyz[1]]
-        # xmax = [ centerxyz[0]+offsetxyz[0], centerxyz[1]+offsetxyz[1]]
-        # xmin = [-offsetxyz[0], -offsetxyz[1]]
-        # xmax = [offsetxyz[0], offsetxyz[1]]
-        limit = max(offsetxyz[0], offsetxyz[1])
-        xmin = [centerxyz[0]-limit, centerxyz[1]-limit]
-        xmax = [centerxyz[0]+limit, centerxyz[1]+limit]
-        limit *= 2
-        # if self.mode == READ_FROM_TURTLEBOT:
-        #     xmin = [-1.5, -1.5]
-        #     xmax = [1.5, 1.5]
+    def plot_network(self, limit, xmin, xmax, src, filename, traj_list=None):
         spacing=limit/160.0
         X,Y      = np.meshgrid(np.arange(xmin[0],xmax[0],spacing),np.arange(xmin[1],xmax[1],spacing))
 
-        # Xsrc = [0]*self.dim
-        # Xsrc[0]=-6 #?change
-        # Xsrc[1]=3
-        # Xsrc[2]=0.3
-        # Xsrc = src.detach().clone().cpu().numpy()
         Xsrc = src 
-        # Xsrc[2] = 0.2
-        # Xsrc = [0.2, -0.2, 0]
         
         XP       = np.zeros((len(X.flatten()),2*self.dim))#*((xmax[dims_n]-xmin[dims_n])/2 +xmin[dims_n])
         XP[:,:self.dim] = Xsrc
@@ -1027,11 +1026,11 @@ class Model(torch.nn.Module):
         
         tt = self.TravelTimes(XP)
         ss = self.Speed(XP)#*5
-        tau = self.Tau(XP)
+        # tau = self.Tau(XP)
         
         TT = tt.to('cpu').data.numpy().reshape(X.shape)
         V  = ss.to('cpu').data.numpy().reshape(X.shape)
-        TAU = tau.to('cpu').data.numpy().reshape(X.shape)
+        # TAU = tau.to('cpu').data.numpy().reshape(X.shape)
 
         fig = plt.figure()
 
@@ -1040,51 +1039,30 @@ class Model(torch.nn.Module):
         # ax.invert_yaxis()
         quad1 = ax.pcolormesh(X,Y,V,vmin=0,vmax=1)
 
-
-        # #! camera triangle
-        # if camera_matrix is not None:
-        #     orientation_matrix = camera_matrix[:3, :3]  # Assuming the rotation part is the 3x3 upper-left submatrix
-        #     position = src
-
-        #     # Calculate the orientation angle from the orientation matrix
-        #     yaw = np.arctan2(orientation_matrix[1, 0], orientation_matrix[0, 0])  # You can use this angle to represent the camera look at
-        #     yaw += np.pi/2
-
-        #     # Create a small triangle marker for the camera
-        #     triangle_size = 0.2  # Adjust the size as needed
-        #     triangle_marker = np.array([[0, 0], [triangle_size/2, -triangle_size/2], [triangle_size / 2, triangle_size/2]])
-            
-        #     # Rotate the triangle marker to match the camera's orientation
-        #     rotation_matrix = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
-        #     rotated_triangle_marker = np.dot(triangle_marker, rotation_matrix.T)
-
-        #     # # Add the triangle marker at the camera position
-        #     # ax.plot(rotated_triangle_marker[0], rotated_triangle_marker[1], 'r^', markersize=10)
-
-        #     camera_x = position[0] + rotated_triangle_marker[:, 0]
-        #     camera_y = position[1] + rotated_triangle_marker[:, 1]
-        #     ax.fill(camera_x, camera_y, 'b')
-
-    
-        # #! plot trajectory
-        # if traj_list is not None:
-        #     ax.plot(traj_list[:, 0], traj_list[:, 1], color='pink', marker = 'o', markersize=0.8, linestyle='-')
-        #     traj_list_path = self.folder+"/"+str(epoch)+".npy"
-        #     np.save(traj_list_path, traj_list)
-        #     plt.savefig(self.folder+"/plots"+str(epoch)+"_"+str(alpha)+"_"+str(round(total_train_loss,4))+"_0.png",bbox_inches='tight')
-
-        #     #? plot trajectory with step size
-        #     ax.plot(self.trajectory[:, 0], self.trajectory[:, 1], color='red', marker='o', markersize=0.8, linestyle='-', linewidth=1)
-            
-
-        # ax.contour(X,Y,TT,np.arange(0,5,0.01), cmap='bone', linewidths=0.3)#0.25
         contour_density = self.config["model"]["contour_density"]
         ax.contour(X,Y,TT,np.arange(0,100,contour_density), cmap='bone', linewidths=0.3)#0.25
 
-        plt.colorbar(quad1,ax=ax, pad=0.1, label='Predicted Velocity')
-        plt.savefig(self.folder+"/plots"+str(epoch)+"_"+str(alpha)+"_"+str(round(total_train_loss,4))+"_0.png",bbox_inches='tight')
+        #! plot trajectory
+        if traj_list is not None:
+            ax.plot(traj_list[:, 0], traj_list[:, 1], color='pink', marker = 'o', markersize=0.8, linestyle='-')
 
+        plt.colorbar(quad1,ax=ax, pad=0.1, label='Predicted Velocity')
+        plt.savefig(filename)
         plt.close(fig)
+
+    def plot(self, epoch, total_train_loss, alpha, cur_points=None, camera_matrix=None, traj_list = None):
+        offsetxyz = self.config['data']['offset']
+        centerxyz = self.config['data']['center']
+
+        limit = max(offsetxyz[0], offsetxyz[1])
+        xmin = [centerxyz[0]-limit, centerxyz[1]-limit]
+        xmax = [centerxyz[0]+limit, centerxyz[1]+limit]
+        limit *= 2
+        
+        for i, src in enumerate(self.srcs):
+            traj_list = self.predict_trajectory(src, self.initial_view, step_size=0.05, tol=0.2)
+            filename = self.folder+"/plots_"+str(epoch)+"_"+str(i)+".png"
+            self.plot_network(limit, xmin, xmax, src, filename, traj_list)
 
         if cur_points is not None:
             # print("plot: cur point shape:",cur_points.shape)
@@ -1097,32 +1075,6 @@ class Model(torch.nn.Module):
             plt.savefig(self.folder+"/plots_dist_"+str(epoch)+".png")
             plt.close()
 
-
-        #?add four subregion encoder + generator
-        if False:
-            # Calculate the sum of all weights
-            #? pure subnets output
-            # weighted_outputs = self.plot_out(XP)
-            #? normalized start feature, and show output feature
-            weighted_outputs = self.plot_end_out(XP)
-
-            plt.figure(figsize=(12, 10))
-            #! loop over the subnets
-            cols = self.config["region"]["columns"]
-            rows = self.config["region"]["rows"]
-            for i, region in enumerate(self.regions, 1):
-                weighted_output = weighted_outputs[i - 1].to('cpu').data.reshape(X.shape)
-                # change nan to 0
-                # weighted_output = torch.where(torch.isnan(weighted_output), torch.zeros_like(weighted_output), weighted_output) 
-
-                plt.subplot(cols, rows, i)
-                plt.gca().set_aspect('equal', adjustable='box')
-                quad1 = plt.pcolormesh(X, Y, weighted_output.numpy(), vmin=0, vmax=1)
-                plt.colorbar(quad1, pad=0.1, label=f'Subnet Output {i}')
-
-            plt.tight_layout()
-            plt.savefig(self.folder+"/plots"+str(epoch) + "_subnets.png")
-            plt.close()
 
     def plot_valid(self, src, valid_indices):
         offsetxyz = self.config['data']['offset']
@@ -1169,6 +1121,68 @@ class Model(torch.nn.Module):
         plt.close(fig)
 
 
+    def predict_trajectory(self, Xsrc, Xtar, step_size=0.03, tol=0.02):
+        Xsrc = Tensor(Xsrc).cuda()
+        Xtar = Tensor(Xtar).cuda()
+        XP_traj= torch.cat((Xsrc,Xtar))
+        dis= torch.norm(XP_traj[:self.dim]-XP_traj[self.dim:])
+        point_start = []
+        point_goal = []
+        iter = 0
+        while dis > tol:
+            gradient = self.Gradient(XP_traj[None,:].clone())
+            XP_traj = XP_traj - step_size * gradient[0]#.cpu()
+            dis = torch.norm(XP_traj[3:6]-XP_traj[0:3])
+            point_start.append(XP_traj[0:3])
+            point_goal.append(XP_traj[3:6])
+            iter = iter + 1
+            if iter > 200:
+                break 
+        
+        point_goal.reverse()
+        point = point_start + point_goal
+        if point_start:
+            traj = torch.cat(point).view(-1, 3)
+            traj = torch.cat((Xsrc[None,], traj, Xtar[None,]), dim=0)
+        else:
+            traj = torch.cat((Xsrc[None,], Xtar[None,]), dim=0)
+        traj = traj[~torch.isnan(traj).any(dim=1)]
+        return traj.detach().cpu().numpy()
+
+
+    def predict_trajectory_old(self, Xsrc, Xtar, step_size=0.03, tol=0.02):
+        Xsrc = Tensor(Xsrc).cuda()
+        Xtar = Tensor(Xtar).cuda()
+        XP_traj= torch.cat((Xsrc,Xtar))
+        dis= torch.norm(XP_traj[:self.dim]-XP_traj[self.dim:])
+        point_start = []
+        point_goal = []
+        iter = 0
+        while dis > tol:
+            gradient = self.Gradient(XP_traj[None,:].clone())
+            XP_traj = XP_traj - step_size * gradient[0]#.cpu()
+            XP_traj[2] = Xsrc[2]
+            XP_traj[5] = Xtar[2]
+            dis = torch.norm(XP_traj[3:6]-XP_traj[0:3])
+            point_start.append(XP_traj[0:3])
+            point_goal.append(XP_traj[3:6])
+            iter = iter + 1
+            if iter > 200:
+                break 
+        
+        point_goal.reverse()
+        point = point_start + point_goal
+        if point_start:
+            traj = torch.cat(point).view(-1, 3)
+            traj = torch.cat((Xsrc[None,], traj, Xtar[None,]), dim=0)
+        else:
+            traj = torch.cat((Xsrc[None,], Xtar[None,]), dim=0)
+
+        #filter nan values
+        traj = traj[~torch.isnan(traj).any(dim=1)]
+        return traj.detach().cpu().numpy()
+
+
 
 
 
@@ -1190,34 +1204,42 @@ def main():
 
 def eval():
     modelPath = './Experiments'
-    config_path = "configs/cube_passage.yaml"
-    modelpath = "Experiments/07_09_14_02/Model_Epoch_01500_ValLoss_7.895163e-04.pt"
+    config_path = 'Experiments/08_18_12_48/Auburn.yaml'
+    modelpath = "Experiments/08_18_12_48/Model_Epoch_00250_ValLoss_3.238178e-02.pt"
 
     # model    = Model(modelPath, config_path, device='cpu')
     model    = Model(modelPath, config_path, device='cuda:0')
 
     model.load(modelpath)
-    model.plot( Tensor([-2.0, -0.0, 0]), 0, 0, 0, None, None, None)
-    model.plot_valid( Tensor([-2.0, -0.0, 0]), [ 0, 2, 3,  5, 6, 7, 8])
+    traj = model.predict_trajectory(Tensor([0.0, 3.5, 0]), Tensor([-1, -1.0, 0.0]), step_size=0.05, tol=0.05)
+    print(traj)
+    
+    # viz
+    if True:
+        import trimesh
+        scene = trimesh.Scene()
+        mesh = trimesh.load("./data/gibson/Auburn/Auburn.obj")
+        pc = trimesh.PointCloud(traj)
+        scene.add_geometry([mesh, pc])
+        scene.show()
+    print()
     
     
-    # t = torch.tensor([[-0.3, -0.2, 0, -0.3, -0.2, 0],
-    #                   [-0.3, 0.2, 0, -0.3, 0.2, 0],
-    #                   [0.3, 0, 0, 0.3, 0, 0],
-    #                   [0.3, 0.35, 0, 0.3, 0.35, 0],
-    #                   [-0.3, -0.35, 0, -0.3, -0.35, 0],
-    #                   [-0.1, -0.3, 0, -0.1, -0.3, 0],]).to('cuda:0')
-    # model.plot_out_valid(t, [0, 1, 2, 3, 4, 5, 6, 7])
-    # features, _ = model.all_encode_out(t)
-    # start_features = features[:6]
-    # scales = torch.sqrt(torch.sum (  ( start_features**2 ) , dim =1)).unsqueeze(1) 
-    # print(scales)
-    # print("done")
+
+def main2():
+    modelPath = './Experiments'
+    config_folder = "configs/gibson_configs"
+    config_folder = "configs/gibson_all_configs"
+    for config_file in os.listdir(config_folder):
+        config_path = os.path.join(config_folder, config_file)
+        model    = Model(modelPath, config_path, device='cuda:0')
+        model.train()
 
 
 
 if __name__ == "__main__":
-    main()
+    # main()
     # eval()
+    main2()
 
 

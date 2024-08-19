@@ -3,6 +3,7 @@ import torch
 import igl
 import matplotlib.pyplot as plt
 import yaml
+import os
 
 def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None, plane=[-5, 5, -5, 5], height=0.0, scale=1.0, viz_start=True):
     #! visualize the mesh
@@ -105,21 +106,21 @@ def unsigned_distance_without_bvh(triangles, query_points):
     return unsigned_distance
 
 def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None, minimum=0.07, maximum=0.3, num=10000, scale=1.0, region=None, must_inside=True):
-    pc0 = torch.rand((num*10, 3))
-    random_offsets = 2*torch.rand(num*10, 3)-1
+    pc0 = torch.rand((num*8, 3))
+    random_offsets = 2*torch.rand(num*8, 3)-1
     pc0[:,0] = random_offsets[:,0]*offsetxyz[0]+center[0]
-    random_offsets = 2*torch.rand(num*10, 3)-1
+    random_offsets = 2*torch.rand(num*8, 3)-1
     pc0[:,1] = random_offsets[:,1]*offsetxyz[1]+center[1]
-    random_offsets = 2*torch.rand(num*10, 3)-1
+    random_offsets = 2*torch.rand(num*8, 3)-1
     pc0[:,2] = random_offsets[:,2]*offsetxyz[2]+center[2]
 
-    dP = torch.rand((num*10, 3))-0.5
-    rL = torch.rand((num*10, 3))
-    random_offsets = 2*torch.rand(num*10, 3)-1
+    dP = torch.rand((num*8, 3))-0.5
+    rL = torch.rand((num*8, 3))
+    random_offsets = 2*torch.rand(num*8, 3)-1
     rL[:,0] = random_offsets[:,0]*offsetxyz[0]
-    random_offsets = 2*torch.rand(num*10, 3)-1
+    random_offsets = 2*torch.rand(num*8, 3)-1
     rL[:,1] = random_offsets[:,1]*offsetxyz[1]
-    random_offsets = 2*torch.rand(num*10, 3)-1
+    random_offsets = 2*torch.rand(num*8, 3)-1
     rL[:,2] = random_offsets[:,2]*offsetxyz[2]
     # rL[:,0] = rL[:,0]*0.3
     # rL[:,1] = rL[:,1]*0.3
@@ -197,8 +198,73 @@ def uniform_gt_pts_speeds(center, offsetxyz, limitxyz, wallsize=0, meshpath=None
     # plt.show()
     return x, y, z
 
+def sample_one_mesh(config_path):
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
+    targetfolder = config["paths"]["folder"]
+    name = config["paths"]["name"]
+    folder = os.path.join(targetfolder, name)
+    center = np.array(config["data"]["center"])
+    offset = np.array(config["data"]["offset"])
+    limit = np.array(config["data"]["limit"])
+    wallsize = config["data"]["wallsize"]
+    dim = config["data"]["dim"]
+    minimum = config["data"]["minimum"]
+    maximum = config["data"]["maximum"]
+    sample_number = config["data"]["sample_num"]
+    # sample_number = 10000
+    scale = config["data"]["scaling"]
+    # pointspath = config["paths"]["pointspath"]
+    # speedspath = config["paths"]["speedspath"]
+    meshpath = os.path.join(folder, name + ".obj")
 
-if __name__ == '__main__':
+    #? 2D window
+    region_predefined = config["region"]["use_predefined"]
+    columns, rows = 3, 3
+    if True:
+        regions = config["region"]['regions']
+    else:
+        regions = []
+        xmin, xmax, ymin, ymax = config["region"]["boundaries"]
+        columns = config["region"]["columns"]
+        rows = config["region"]["rows"]
+        overlap_ratio = config["region"]["overlap_ratio"]
+
+        width_total = xmax - xmin
+        height_total = ymax - ymin
+        width_core = width_total / (columns)
+        width_overlap = width_core * overlap_ratio
+        column_regions = [(xmin - width_overlap + i*width_core, xmin + width_overlap + i*width_core) for i in range(columns)]
+
+        height_core = height_total / (rows)
+        height_overlap = height_core * overlap_ratio
+        row_regions = [(ymin - height_overlap + i*height_core, ymin + height_overlap + i*height_core) for i in range(rows)]
+
+        for i in range(rows):
+            for j in range(columns):
+                region = (column_regions[j][0], column_regions[j][1], row_regions[i][0], row_regions[i][1])
+                regions.append(region)
+
+    for ind, region in enumerate(regions):
+        points, speeds, bounds = uniform_gt_pts_speeds(center, offset, limit, wallsize, meshpath, minimum, maximum, sample_number, scale=scale, region=None)
+        pointspath = f"{folder}/{name}_points_{ind}.npy"
+        speedspath = f"{folder}/{name}_speeds_{ind}.npy"
+        boundspath = f"{folder}/{name}_bounds_{ind}.npy"
+        print("points shape: ", points.shape)
+        np.save(pointspath, points)
+        np.save(speedspath, speeds)
+        np.save(boundspath, bounds)
+        if False:
+            plane = region
+            rand_indices = torch.randint(0, len(points), (100000,))
+            points = points[rand_indices]
+            speeds = speeds[rand_indices]
+            viz(points, speeds, meshpath=None, scale=scale, plane=plane, height=center[2])
+            viz(points, speeds, meshpath=meshpath, scale=scale, plane=plane, height=center[2], viz_start=False)
+            print()
+
+
+if False:
     import sys
     import yaml
     # # meshpath = "mesh_scaled_11_29_15.obj"
@@ -326,3 +392,14 @@ if __name__ == '__main__':
     #     print("points shape: ", points.shape)
     #     np.save(pointspath, points)
     #     np.save(speedspath, speeds)
+
+
+
+if __name__ == '__main__':
+    # config_path = "configs/auburn.yaml"
+    config_folder = "configs/gibson_configs"
+    config_folder = "configs/gibson_all_configs"
+    for config_file in os.listdir(config_folder):
+        if config_file.endswith(".yaml"):
+            config_path = os.path.join(config_folder, config_file)
+            sample_one_mesh(config_path)

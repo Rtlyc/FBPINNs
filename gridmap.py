@@ -361,7 +361,7 @@ class OccupancyGridMap:
         # get to know sum of mask to (50000, 1)
         neighbor_counts = torch.sum(mask, dim=0).cpu().numpy()
         map_indices = map_indices.cpu().numpy()
-        four_colors = numpy.array([[47, 243, 224, 130], [248, 210, 16, 130], [250, 38, 160, 130], [244, 23, 32, 130]])/255
+        four_colors = numpy.array([[47, 243, 224, 130], [248, 210, 16, 130], [250, 38, 160, 130], [244, 23, 32, 130], [182, 141, 64, 130]])/255 # with a -1 color tan
         overlay[map_indices[:, 1], map_indices[:, 0], :] = four_colors[neighbor_counts[:,]-1] 
         print()
 

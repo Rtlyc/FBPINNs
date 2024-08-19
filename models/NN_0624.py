@@ -174,7 +174,7 @@ class SubNN(nn.Module):
                 y = y.squeeze(1)
             x = torch.sin(lip_const*y)
 
-            for ii in range(1,self.nl+1):
+            for ii in range(1,len(self.layer_sizes)):
                 w = self.encoder[ii].weight
                 b = self.encoder[ii].bias
 
@@ -408,14 +408,9 @@ class NN(nn.Module):
         region = self.all_regions
         tau, coords = self.out(Xp, region)
 
-       
-        D = Xp[:,self.dim:]-Xp[:,:self.dim]
-        
-        D_norm = torch.sqrt(torch.einsum('ij,ij->i', D, D))
-
         TT = tau[:,0]
 
-        del Xp, tau, D, D_norm
+        del Xp, tau
         return TT
     
     @staticmethod
@@ -448,5 +443,42 @@ class NN(nn.Module):
         del Xp, tau, dtau
         return Ypred
 
+    @staticmethod
+    def Gradient(self, Xp):
+        Xp = Xp.to(torch.device(self.Params['Device']))
+       
+        region = self.all_regions
+
+        tau, Xp = self.out(Xp, region)
+        dtau = self.gradient(tau, Xp)
+
+        DT0 = dtau[:,:self.dim] # dtau(s)
+        S0 = torch.einsum('ij,ij->i', DT0, DT0) # |dtau(s)|^2 = 1/(S(s)^2)
+        Ypred0 = 1/S0 * DT0 # S(s)^2 * dtau(s)
+        
+        DT1 = dtau[:,self.dim:] # dtau(g)
+        S1 = torch.einsum('ij,ij->i', DT1, DT1)
+        Ypred1 = 1/S1 * DT1
+        
+        return torch.cat((Ypred0, Ypred1),dim=1)
+    
+    @staticmethod
+    def Gradient_old(self, Xp):
+        Xp = Xp.to(torch.device(self.Params['Device']))
+       
+        region = self.all_regions
+
+        tau, Xp = self.out(Xp, region)
+        dtau = self.gradient(tau, Xp)
+
+        DT0 = dtau[:,:self.dim] # dtau(s)
+        S0 = torch.einsum('ij,ij->i', DT0, DT0) # |dtau(s)|^2 = 1/(S(s)^2)
+        Ypred0 = DT0 # S(s)^2 * dtau(s)
+        
+        DT1 = dtau[:,self.dim:] # dtau(g)
+        S1 = torch.einsum('ij,ij->i', DT1, DT1)
+        Ypred1 = DT1
+        
+        return torch.cat((Ypred0, Ypred1),dim=1)
 
 
