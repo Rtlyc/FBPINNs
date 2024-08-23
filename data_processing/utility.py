@@ -81,7 +81,7 @@ def check_collision(query_points, vertices, faces, scale=1):
     
     #! interpolate points
     new_query_points = []
-    interpolation_steps = 10
+    interpolation_steps = 20
     for i in range(len(query_points) - 1):
         start_point = query_points[i]
         end_point = query_points[i+1]

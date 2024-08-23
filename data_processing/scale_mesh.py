@@ -30,13 +30,15 @@ def scale_mesh(meshpath, targetpath, scale_length=10.0):
 
     # Save the transformed mesh if needed
     mesh.export(targetpath)
+    return mesh.bounds
 
 
 if __name__ == "__main__":
     # mesh_folder = "data/gibson_mesh"
-    config_folder = "configs/gibson_configs"
-    config_folder = "configs/gibson_all_configs"
-    for config_file in os.listdir(config_folder):
+    # config_folder = "configs/gibson_configs"
+    config_folder = "configs/final_gibson_config"
+    for config_file in os.listdir(config_folder)[0:1]:
+        config_file = "Auburn.yaml"
         if config_file.endswith(".yaml"):
             with open(os.path.join(config_folder, config_file), 'r') as f:
                 config = yaml.load(f, Loader=yaml.FullLoader)
@@ -47,10 +49,10 @@ if __name__ == "__main__":
             if not os.path.exists(folder):
                 os.makedirs(folder)
             target_meshpath = os.path.join(folder, name + ".obj")
-            scale_mesh(raw_meshpath, target_meshpath)
+            meshbounds = scale_mesh(raw_meshpath, target_meshpath)
             print(f"Processed: {name}, saved to {target_meshpath}")
 
-            if False:
+            if True:
                 scene = trimesh.Scene()
                 mesh = trimesh.load_mesh(target_meshpath)
                 scene.add_geometry(mesh)

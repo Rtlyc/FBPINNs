@@ -24,9 +24,9 @@ def generate_gibson_config(gibson_folder, target_folder, data_folder, example_co
 
 
 if __name__ == "__main__":
-    gibson_folder = "/home/exx/Documents/gibson_large_plus_mesh/gibson_fullplus"
-    target_folder = "configs/gibson_all_configs"
-    data_folder = "data/gibson_all"
+    gibson_folder = "data/final_gibson"
+    target_folder = "configs/final_gibson_config"
+    data_folder = "data/final_gibson_data"
     example_config = "configs/example_gibson.yaml"
     generate_gibson_config(gibson_folder, target_folder, data_folder, example_config, filenum=100)
     print("Gibson config files generated.")

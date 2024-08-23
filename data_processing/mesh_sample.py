@@ -4,6 +4,7 @@ import igl
 import matplotlib.pyplot as plt
 import yaml
 import os
+import trimesh
 
 def viz(points, speeds, lidar_points=None, meshpath=None, camera_positions=None, plane=[-5, 5, -5, 5], height=0.0, scale=1.0, viz_start=True):
     #! visualize the mesh
@@ -218,6 +219,10 @@ def sample_one_mesh(config_path):
     # speedspath = config["paths"]["speedspath"]
     meshpath = os.path.join(folder, name + ".obj")
 
+    #! improve mesh quality by offset bounds
+    mesh = trimesh.load_mesh(meshpath)
+    offset = mesh.bounds[1]
+
     #? 2D window
     region_predefined = config["region"]["use_predefined"]
     columns, rows = 3, 3
@@ -245,6 +250,7 @@ def sample_one_mesh(config_path):
                 region = (column_regions[j][0], column_regions[j][1], row_regions[i][0], row_regions[i][1])
                 regions.append(region)
 
+    print("Sampling points for ", name)
     for ind, region in enumerate(regions):
         points, speeds, bounds = uniform_gt_pts_speeds(center, offset, limit, wallsize, meshpath, minimum, maximum, sample_number, scale=scale, region=None)
         pointspath = f"{folder}/{name}_points_{ind}.npy"
@@ -254,7 +260,8 @@ def sample_one_mesh(config_path):
         np.save(pointspath, points)
         np.save(speedspath, speeds)
         np.save(boundspath, bounds)
-        if False:
+        #! viz
+        if True:
             plane = region
             rand_indices = torch.randint(0, len(points), (100000,))
             points = points[rand_indices]
@@ -262,7 +269,6 @@ def sample_one_mesh(config_path):
             viz(points, speeds, meshpath=None, scale=scale, plane=plane, height=center[2])
             viz(points, speeds, meshpath=meshpath, scale=scale, plane=plane, height=center[2], viz_start=False)
             print()
-
 
 if False:
     import sys
@@ -397,9 +403,10 @@ if False:
 
 if __name__ == '__main__':
     # config_path = "configs/auburn.yaml"
-    config_folder = "configs/gibson_configs"
-    config_folder = "configs/gibson_all_configs"
-    for config_file in os.listdir(config_folder):
+    # config_folder = "configs/gibson_configs"
+    config_folder = "configs/final_gibson_config"
+    for config_file in os.listdir(config_folder)[:1]:
+        config_file = "Auburn.yaml"
         if config_file.endswith(".yaml"):
             config_path = os.path.join(config_folder, config_file)
             sample_one_mesh(config_path)

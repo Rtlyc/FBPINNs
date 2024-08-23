@@ -4,6 +4,7 @@ This script serves as an executing script to transform the original model into a
 
 import torch 
 import torch.nn as nn
+import matplotlib
 import matplotlib.pyplot as plt
 import os 
 from datetime import datetime, timedelta
@@ -20,10 +21,64 @@ from torch.utils.tensorboard import SummaryWriter
 import time
 import torch.profiler
 from torch.profiler import profile, record_function, ProfilerActivity
-
+from data_processing import lidar_sample
 import gridmap
 
 USE_FILTER = True
+matplotlib.use('Agg')
+
+class PointTransformer3D:
+    def __init__(self, scale_factor=12.0):
+        self.scale_factor = scale_factor
+        self.center = None
+        self.max_size = None
+
+    def transform(self, points):
+        # Calculate the bounding box considering both first three and last three columns
+        xmin = min(points[:, 0].min(), points[:, 3].min())
+        ymin = min(points[:, 1].min(), points[:, 4].min())
+        zmin = min(points[:, 2].min(), points[:, 5].min())
+
+        xmax = max(points[:, 0].max(), points[:, 3].max())
+        ymax = max(points[:, 1].max(), points[:, 4].max())
+        zmax = max(points[:, 2].max(), points[:, 5].max())
+
+        # Calculate the center and sizes
+        if self.center is None:
+            self.center = Tensor([(xmin + xmax) / 2, (ymin + ymax) / 2, (zmin + zmax) / 2])
+        size = Tensor([xmax - xmin, ymax - ymin, zmax - zmin])
+
+        # Normalize and scale
+        if self.max_size is None:
+            self.max_size = size.max()
+        points[:, [0, 3]] -= self.center[0]
+        points[:, [1, 4]] -= self.center[1]
+        points[:, [2, 5]] -= self.center[2]
+        points *= self.scale_factor / self.max_size
+
+        return points
+    
+    def transform_3d(self, points):
+        points[:, 0] -= self.center[0]
+        points[:, 1] -= self.center[1]
+        points[:, 2] -= self.center[2]
+        points *= self.scale_factor / self.max_size
+        return points
+    
+    def transform_bounds(self, bounds):
+        bounds *= self.scale_factor / self.max_size
+        return bounds
+
+    def inverse_transform(self, points):
+        # Scale back
+        points /= self.scale_factor / self.max_size
+
+        # Translate back
+        points[:, 0] += self.center[0]
+        points[:, 1] += self.center[1]
+        points[:, 2] += self.center[2]
+
+        return points
 
 class FastTensorDataLoader:
     """
@@ -396,7 +451,6 @@ class Model(torch.nn.Module):
         self.region_combination = self.config['region']["region_combination"]
 
         self.batch_size = self.config['model']['batch_size']
-        self.data_folder = os.path.join(self.config['paths']['folder'], self.name)
 
         self.load_rawdata()
         self.init_network()
@@ -438,23 +492,7 @@ class Model(torch.nn.Module):
             points = np.load("data/mesh_points_0.npy")
             speeds = np.load("data/mesh_speeds_0.npy")
             self.explored_data = np.concatenate((points, speeds), axis=1)
-        elif True:
-            # points = np.load("data/cube_passage_points.npy")
-            # speeds = np.load("data/cube_passage_speeds.npy")
-            # points = np.load("data/cabin_points.npy")
-            # speeds = np.load("data/cabin_speeds.npy")
-            points = np.load(os.path.join(self.data_folder, f"{self.name}_points_0.npy")).astype(np.float32)
-            speeds = np.load(os.path.join(self.data_folder, f"{self.name}_speeds_0.npy")).astype(np.float32)
-            self.all_bounds = np.load(os.path.join(self.data_folder, f"{self.name}_bounds_0.npy")).astype(np.float32)
-            # invalid_indices_0 = (points[:, 0] > -1.0) & (points[:, 0] < 1.0) | (points[:, 1] > 0.0)
-            # invalid_indices_1 = (points[:, 3] > -1.0) & (points[:, 3] < 1.0) | (points[:, 4] > 0.0)
-            # invalid_indices = np.logical_or(invalid_indices_0, invalid_indices_1)
-
-            # points = points[~invalid_indices]
-            # speeds = speeds[~invalid_indices] 
-            self.explored_data = np.concatenate((points, speeds), axis=1)
-            self.explored_data = torch.tensor(self.explored_data, device=self.device)
-            self.all_bounds = torch.tensor(self.all_bounds, device=self.device)
+        
         if False:
             allpoints = []
             allspeeds = []
@@ -472,13 +510,54 @@ class Model(torch.nn.Module):
             self.explored_data = np.concatenate((allpoints, allspeeds), axis=2)
             self.explored_data = torch.tensor(self.explored_data, device=self.device)
             self.all_bounds = torch.tensor(allbounds, device=self.device)
-        if False: #b1 dataset
-            from data_processing import lidar_sample
-            root_dir = '/home/exx/Documents/FBPINNs/b1/haas_fine'
+        
+        if "b1" not in self.name:
+            # points = np.load("data/cube_passage_points.npy")
+            # speeds = np.load("data/cube_passage_speeds.npy")
+            # points = np.load("data/cabin_points.npy")
+            # speeds = np.load("data/cabin_speeds.npy")
+            # self.data_folder = 'data/final_gibson_data/Auburn'
+            # self.name = 'Auburn'
+            self.data_folder = os.path.join(self.config['paths']['folder'], self.name)
+            points = np.load(os.path.join(self.data_folder, f"{self.name}_points_0.npy")).astype(np.float32)
+            speeds = np.load(os.path.join(self.data_folder, f"{self.name}_speeds_0.npy")).astype(np.float32)
+            self.all_bounds = np.load(os.path.join(self.data_folder, f"{self.name}_bounds_0.npy")).astype(np.float32)
+
+            # points = np.load("data/auburn_points_0.npy")
+            # speeds = np.load("data/auburn_speeds_0.npy")
+            # self.all_bounds = np.load("data/auburn_bounds_0.npy")
+            # invalid_indices_0 = (points[:, 0] > -1.0) & (points[:, 0] < 1.0) | (points[:, 1] > 0.0)
+            # invalid_indices_1 = (points[:, 3] > -1.0) & (points[:, 3] < 1.0) | (points[:, 4] > 0.0)
+            # invalid_indices = np.logical_or(invalid_indices_0, invalid_indices_1)
+
+            # points = points[~invalid_indices]
+            # speeds = speeds[~invalid_indices] 
+            self.explored_data = np.concatenate((points, speeds), axis=1)
+            self.explored_data = torch.tensor(self.explored_data, device=self.device)
+            self.all_bounds = torch.tensor(self.all_bounds, device=self.device)
+        
+        elif 'b1' in self.name: #b1 dataset
+            root_dir = '/home/exx/Documents/FBPINNs/b1'
             config_file = "/home/exx/Documents/FBPINNs/configs/lidar.json"
             dataset = lidar_sample.LidarDataset(root_dir, config_file)
             points, speeds, bounds = dataset.get_speeds(range(133), num=500000)
+            # scale to -5, 5
+            self.transformer = PointTransformer3D(scale_factor=10.0)
+
+            # self.scale_factor = scale_factor
+            # self.center = None
+            # self.max_size = None
+
+            # Transform points
+            points = self.transformer.transform(points)
+            bounds = self.transformer.transform_bounds(bounds)
+
+            self.config['data']['transform_scale'] = 10.0
+            self.config['data']['transform_center'] = self.transformer.center.tolist()
+            self.config['data']['transform_max_size'] = self.transformer.max_size.item()
+
             self.explored_data = torch.cat((points, speeds), dim=1)[None,]
+            self.all_bounds = bounds
         print("explored data shape:", self.explored_data.shape)
 
         #! Parameters for the occupancy grid
@@ -738,7 +817,10 @@ class Model(torch.nn.Module):
         
     def load(self, filepath):
         #B = torch.load(self.Params['ModelPath']+'/B.pt')
-        
+        self.regions = self.config['region']['regions']
+        self.all_regions = list(range(len(self.regions)))
+        self.active_regions = self.all_regions
+
         checkpoint = torch.load(
             filepath, map_location=torch.device(self.Params['Device']))
         Bs = checkpoint['B_state_dicts']
@@ -1121,7 +1203,36 @@ class Model(torch.nn.Module):
         plt.close(fig)
 
 
-    def predict_trajectory(self, Xsrc, Xtar, step_size=0.03, tol=0.02):
+    def predict_trajectory_batch(self, XP_traj, step_size=0.03, tol=0.02, fix_Z=False):
+        # Xsrc = Tensor(Xsrc).cuda()
+        # Xtar = Tensor(Xtar).cuda()
+        # XP_traj= torch.cat((Xsrc,Xtar))
+        XP_traj = Tensor(XP_traj).cuda()
+        max_iter = 300
+        XP_traj_batch = torch.zeros(XP_traj.shape[0], max_iter, 6).cuda()
+        XP_traj_batch[:, 0] = XP_traj
+        for i in range(max_iter-1):
+            gradient = self.Gradient(XP_traj_batch[:, i].clone())
+            XP_traj_batch[:, i+1] = XP_traj_batch[:, i] - step_size * gradient
+            if fix_Z:
+                XP_traj_batch[:, i+1, 2] = XP_traj_batch[:, i, 2]
+                XP_traj_batch[:, i+1, 5] = XP_traj_batch[:, i, 5]
+        distances = torch.norm(XP_traj_batch[:, 1:, 3:6]-XP_traj_batch[:, 1:, 0:3], dim=-1)
+        valid_indices = torch.where(distances<tol, torch.arange(max_iter-1, device='cuda'), max_iter-1).min(dim=1).values
+
+        traj_list = []
+        for i in range(XP_traj.shape[0]):
+            traj = XP_traj_batch[i, :valid_indices[i]+1].detach().cpu().numpy()
+            traj_start = traj[:, :3]
+            traj_end = np.flip(traj[:, 3:], axis=0)
+            traj = np.concatenate((traj_start, traj_end), axis=0)
+            traj = traj[~np.isnan(traj).any(axis=1)]
+            traj_list.append(traj)
+
+        return traj_list
+
+
+    def predict_trajectory(self, Xsrc, Xtar, step_size=0.03, tol=0.02, fix_Z=False):
         Xsrc = Tensor(Xsrc).cuda()
         Xtar = Tensor(Xtar).cuda()
         XP_traj= torch.cat((Xsrc,Xtar))
@@ -1132,6 +1243,9 @@ class Model(torch.nn.Module):
         while dis > tol:
             gradient = self.Gradient(XP_traj[None,:].clone())
             XP_traj = XP_traj - step_size * gradient[0]#.cpu()
+            if fix_Z:
+                XP_traj[2] = Xsrc[2]
+                XP_traj[5] = Xtar[2]
             dis = torch.norm(XP_traj[3:6]-XP_traj[0:3])
             point_start.append(XP_traj[0:3])
             point_goal.append(XP_traj[3:6])
@@ -1194,10 +1308,11 @@ def main():
     config_path = "configs/ruiqi.yaml"
     config_path = "configs/mesh.yaml"
     config_path = "configs/cube_passage.yaml"
-    config_path = "configs/b1.yaml"
     config_path = "configs/almena.yaml"
     config_path = "configs/narrow_cube.yaml"
     config_path = "configs/auburn.yaml"
+    config_path = "configs/b1.yaml"
+    config_path = "configs/final_gibson_config/Auburn.yaml"
     # config_path = '/home/exx/Documents/FBPINNs/Experiments/08_13_11_06/auburn.yaml'
     model    = Model(modelPath, config_path, device='cuda:0')
     model.train()
@@ -1224,12 +1339,93 @@ def eval():
         scene.show()
     print()
     
-    
+def eval_b1():
+    # eval trajectory 
+    modelPath = './Experiments'
+    config_path = 'Experiments/08_21_16_16/b1.yaml'
+    modelpath = "Experiments/08_21_16_16/Model_Epoch_01000_ValLoss_1.799361e-02.pt"
 
+    model    = Model(modelPath, config_path, device='cuda:0')
+
+    model.load(modelpath)
+    start = Tensor([-1.1, 4.0, 0])
+    goal = Tensor([2, 0.4, 0.0])
+
+    start = Tensor([-1.5, 0.0, 0])
+    goal = Tensor([0.6, 0., 0.0])
+
+    traj = model.predict_trajectory(start, goal, step_size=0.05, tol=0.04, fix_Z=True)
+
+    
+    transformer = PointTransformer3D()
+    transformer.scale_factor = model.config['data']['transform_scale']
+    transformer.max_size = model.config['data']['transform_max_size']
+    transformer.center = model.config['data']['transform_center']
+    traj = transformer.inverse_transform(traj)
+
+    print(traj)
+    np.save("b1_traj.npy", traj)
+    
+    # viz
+    if True:
+        import trimesh
+        # scene = trimesh.Scene()
+        # mesh = trimesh.load("./data/gibson/B1/B1.obj")
+        # pc = trimesh.PointCloud(traj)
+        # scene.add_geometry([mesh, pc])
+        # scene.show()
+
+        lidar = np.load("b1/haas_fine/basement_lidar.npy", allow_pickle=True)
+        positions = np.load("b1/haas_fine/basement_positions.npy", allow_pickle=True)
+
+        global_points = []
+        for i, pos in enumerate(positions):
+            local_lidar = lidar[i]
+            global_lidar = local_lidar + pos
+            global_points.extend(global_lidar)
+
+        global_points = np.array(global_points)
+        rand_idx = np.random.permutation(global_points.shape[0])[:100000]
+
+
+        gt_lidar_pc = trimesh.PointCloud(vertices=global_points[rand_idx], colors=[0,0,255])
+        scene = trimesh.Scene([trimesh.PointCloud(vertices=traj, colors=[255,0,0])])
+        if True:
+            viz_start = True
+            root_dir = '/home/exx/Documents/FBPINNs/b1'
+            config_file = "/home/exx/Documents/FBPINNs/configs/lidar.json"
+            dataset = lidar_sample.LidarDataset(root_dir, config_file)
+            points, speeds, bounds = dataset.get_speeds(range(133), num=20000)
+            points = points.cpu().numpy()
+            speeds = speeds.cpu().numpy()
+            start_points = points[:,:3]
+            start_speeds = speeds[:, 0]
+            # start_colors = (np.outer(1.0 - start_speeds, [255, 0, 0, 50]) + 
+            #     np.outer(start_speeds, [255, 255, 255, 50])).astype(np.uint8)
+            colormap = plt.get_cmap('viridis')
+            start_colors = colormap(start_speeds)
+
+            end_points = points[:,3:6]
+            end_speeds = speeds[:, 1]
+            colormap = plt.get_cmap('viridis')
+            end_colors = colormap(end_speeds)
+            # end_colors = (np.outer(1.0 - end_speeds, [255, 0, 0, 80]) + 
+            #     np.outer(end_speeds, [255, 255, 255, 80])).astype(np.uint8)
+
+            point_cloud = trimesh.PointCloud(start_points, start_colors)
+            if not viz_start:
+                point_cloud = trimesh.PointCloud(end_points, end_colors)
+        
+        scene.add_geometry([gt_lidar_pc])
+        # scene.add_geometry([point_cloud])
+        scene.show(block=False,line_settings={'point_size':4})
+
+    print()
+    
 def main2():
     modelPath = './Experiments'
     config_folder = "configs/gibson_configs"
-    config_folder = "configs/gibson_all_configs"
+    config_folder = "configs/final_gibson_config"
     for config_file in os.listdir(config_folder):
         config_path = os.path.join(config_folder, config_file)
         model    = Model(modelPath, config_path, device='cuda:0')
@@ -1238,8 +1434,9 @@ def main2():
 
 
 if __name__ == "__main__":
-    # main()
+    main()
     # eval()
-    main2()
+    # main2()
+    # eval_b1()
 
 

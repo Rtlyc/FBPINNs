@@ -63,8 +63,8 @@ def get_lidar_data(path="/home/exx/Documents/FBPINNs/b1/haas_first/hass_first_fl
     return pcl_data[:, 0], pcl_data[:, 1]
 
 def get_lidar_data2(path="/home/exx/Documents/FBPINNs/b1/haas_first/hass_first_floor"):
-    lidar_path = os.path.join(path, "lidar.npy")
-    positions_path = os.path.join(path, "positions.npy")
+    lidar_path = os.path.join(path, "lidar_o3d.npy")
+    positions_path = os.path.join(path, "positions_o3d.npy")
     lidar = np.load(lidar_path, allow_pickle=True)
     positions = np.load(positions_path)
     return lidar, positions
@@ -74,7 +74,8 @@ class LidarDataset(Dataset):
     def __init__(
         self,
         root_dir,
-        config=None,   
+        config=None,
+        scale_size = 10   
     ):
         self.root_dir = root_dir
         self.config_file = config
@@ -88,7 +89,7 @@ class LidarDataset(Dataset):
         self.min_depth = configs["sample"]["depth_range"][0]
         self.max_depth = configs["sample"]["depth_range"][1]
         self.n_rays = configs["sample"]["n_rays"]
-        self.n_rays = 5000 #5000
+        # self.n_rays = 5000 #5000
         self.n_strat_samples = configs["sample"]["n_strat_samples"]
         self.n_surf_samples = configs["sample"]["n_surf_samples"]
         self.dist_behind_surf = configs["sample"]["dist_behind_surf"]  
@@ -96,10 +97,15 @@ class LidarDataset(Dataset):
         self.minimum = configs["sample"]["minimum"]
         self.maximum = configs["sample"]["maximum"]
 
+        self.ceiling = configs['sample']['ceiling']
+        self.floor = configs['sample']['floor']
+        self.sphere_radius = configs['sample']['sphere_radius']
+        self.sphere_number = configs['sample']['sphere_number']
+
 
         self.up_vec = np.array([0., 1., 0.])
         # self.dirs_C = transform.ray_dirs_C(1,self.H,self.W,self.fx,self.fy,self.cx,self.cy,self.device,depth_type="z")
-        #TODO: add self.dirs_W
+        #?: add self.dirs_W
         self.lidar_data, self.Ts = get_lidar_data2(self.root_dir)
         # self.frame_data = np.array(self.frame_data, dtype=object)
 
@@ -177,12 +183,15 @@ class LidarDataset(Dataset):
 
             depth_dirs_np = sub_dataset["depth_dirs"][None, ...]
             depth_dirs = torch.from_numpy(depth_dirs_np).float().to(device)
-            sample_pts = sample_lidar_points(depth, T, self.n_rays, depth_dirs, self.dist_behind_surf, self.n_strat_samples, self.n_surf_samples, self.min_depth, self.max_depth, device=device)
+            sample_pts = sample_lidar_points(depth, T, self.n_rays, depth_dirs, self.dist_behind_surf, self.n_strat_samples, self.n_surf_samples, self.min_depth, self.max_depth, self.sphere_radius, self.sphere_number, device=device)
 
-            bound = bounds_pc(sample_pts["pc"], sample_pts["z_vals"],
-                              sample_pts["surf_pc"], sample_pts["depth_sample"])
-            all_points.append(sample_pts["pc"])
-            all_bounds.append(bound)
+            bound, sphere_bound = bounds_pc(sample_pts["pc"], sample_pts["z_vals"],
+                              sample_pts["surf_pc"], sample_pts["depth_sample"], sample_pts["sphere_points"], self.ceiling, self.floor)
+            all_points.append(sample_pts["pc"].reshape(-1, 3))
+            all_points.append(sample_pts["sphere_points"].reshape(-1, 3))
+            all_bounds.append(bound.reshape(-1, 1))
+            all_bounds.append(sphere_bound.reshape(-1, 1))
+
         
         pc = torch.cat(all_points, dim=0)
         bounds = torch.cat(all_bounds, dim=0)
@@ -219,7 +228,7 @@ class LidarDataset(Dataset):
         return x,y,z # points, speeds, bounds
 
 
-def sample_lidar_points(depth, T_WC, n_rays, dirs_W, dist_behind_surf, n_strat_samples, n_surf_samples, min_depth, max_depth, device='cpu'):
+def sample_lidar_points(depth, T_WC, n_rays, dirs_W, dist_behind_surf, n_strat_samples, n_surf_samples, min_depth, max_depth, sphere_radius=0.5, sphere_number=10000, device='cpu'):
     torch.manual_seed(0)
     indices = torch.randint(0, depth.shape[1], (n_rays,), device=device)
     depth_sample = depth[0][indices] #? could cause problem, check dimension
@@ -231,8 +240,42 @@ def sample_lidar_points(depth, T_WC, n_rays, dirs_W, dist_behind_surf, n_strat_s
     max_sample_depth = torch.min(depth_sample + dist_behind_surf, torch.tensor(max_depth))
     # max_sample_depth = depth_sample
 
+    #! Adding some direction sampling algorithms
+    #* 1. sample random uniformly directions
+    #* 2. dot product to get similarity with dirs_W 
+    #* 3. filter out the ones that are very similar
+    #* 4. repeat until n_rays is reached
+    extra_dirs = []
+    n_extra_rays = 500
+    similarity_threshold = 0.997
+    defined_depth = 1.2
+    iter_extra_rays = 0
+    z_height = 0.2
+
+    while len(extra_dirs) < n_extra_rays and iter_extra_rays < 10:
+        iter_extra_rays += 1
+        uniform_dirs = torch.nn.functional.normalize(torch.rand((n_extra_rays*100, 3), dtype=torch.float32, device=device) - 0.5, dim=1)
+        #? filter too large abs z
+        mask = torch.abs(uniform_dirs[:, 2]) < z_height
+        uniform_dirs = uniform_dirs[mask]
+
+        # dirs_W = dirs_W.view(-1, 3)
+        dirs_W_sample = dirs_W_sample.view(-1, 3)
+        dot_products = torch.mm(uniform_dirs, dirs_W_sample.T)
+        mask = torch.all(dot_products < similarity_threshold, dim=1)
+        non_similar_dirs = uniform_dirs[mask]
+        extra_dirs.extend(non_similar_dirs)
+    n_extra_rays = min(n_extra_rays, len(extra_dirs))
+    if n_extra_rays > 0:
+        extra_dirs = torch.vstack(extra_dirs[:n_extra_rays])
+        dirs_W_sample = torch.cat((dirs_W_sample, extra_dirs), dim=0)
+        # depth_sample = torch.cat((depth_sample, torch.full((n_extra_rays,), defined_depth, dtype=torch.float32, device=device)), dim=0)
+        max_sample_depth = torch.cat((max_sample_depth, torch.full((n_extra_rays,), defined_depth, dtype=torch.float32, device=device)), dim=0)
+
+
+
     if True:
-        pc, z_vals, surf_pc = sample_along_lidar_rays(T_WC, min_depth, max_sample_depth, n_strat_samples, n_surf_samples, dirs_W_sample, depth_sample)
+        pc, z_vals, surf_pc, sphere_points = sample_along_lidar_rays(T_WC, min_depth, max_sample_depth, n_strat_samples, n_surf_samples, dirs_W_sample, depth_sample, sphere_radius=sphere_radius, sphere_number=sphere_number)
     else:
         #TODO: need a new sampling strategy, output surf_pc and pc
         numsamples = 5000 
@@ -276,12 +319,13 @@ def sample_lidar_points(depth, T_WC, n_rays, dirs_W, dist_behind_surf, n_strat_s
         "dirs_W_sample": dirs_W_sample,
         "depth_sample": depth_sample,
         "T_WC": T_WC,
+        "sphere_points": sphere_points
     }
 
     return sample_pts 
 
 
-def sample_along_lidar_rays(T_WC, min_depth, max_depth, n_stratified_samples, n_surf_samples, dirs_W, gt_depth):
+def sample_along_lidar_rays(T_WC, min_depth, max_depth, n_stratified_samples, n_surf_samples, dirs_W, gt_depth, sphere_radius=0.5, sphere_number=10000):
     #rays in world frame    
     # origins = T_WC[:, :3, 3]
     origins = T_WC
@@ -293,26 +337,30 @@ def sample_along_lidar_rays(T_WC, min_depth, max_depth, n_stratified_samples, n_
 
 
     # if gt_depth is given, first sample at surface then around surface
-    if gt_depth is not None and n_surf_samples > 0:
+    if False and gt_depth is not None and n_surf_samples > 0:
         surface_z_vals = gt_depth 
         offsets = torch.normal(torch.zeros(gt_depth.shape[0], n_surf_samples-1), 0.1).to(z_vals.device)
         near_surf_z_vals = gt_depth[:,None] + offsets
         if not isinstance(min_depth, torch.Tensor):
             min_depth = torch.full(near_surf_z_vals.shape, min_depth).to(z_vals.device)[...,0]
-        near_surf_z_vals = torch.clamp(near_surf_z_vals, min_depth[:,None], max_depth[:,None])
+        near_surf_z_vals = torch.clamp(near_surf_z_vals, min_depth[:,None], max_depth[:min_depth.shape[0],None])
 
         z_vals = torch.cat((near_surf_z_vals, z_vals), dim=1)
 
+    # !: add sphere sampling around current point
+    sphere_points = origins + torch.normal(torch.zeros(sphere_number, 3), sphere_radius).to(z_vals.device)
+
     # point cloud of 3d sample locations
     pc = origins[:, None, :] + (dirs_W[:, None, :] * z_vals[:, :, None])
+
     
     # surf_pc filter out points on the ground
-    surf_pc = origins + (dirs_W * gt_depth[:, None])
+    surf_pc = origins + (dirs_W[:gt_depth.shape[0]] * gt_depth[:, None])
     # isNotGround = surf_pc[:, 2] > 0.01
     isNotGround = surf_pc[:, 2] > -0.11
     # surf_pc = surf_pc[isNotGround]
 
-    return pc, z_vals, surf_pc
+    return pc, z_vals, surf_pc, sphere_points
 
 def stratified_sample(
     min_depth,
@@ -368,37 +416,49 @@ def stratified_sample(
     return z_vals
 
 
-def bounds_pc(pc, z_vals, surf_pc, depth_sample):
+def bounds_pc(pc, z_vals, surf_pc, depth_sample, sphere_points=None, ceiling=0.8, floor=-0.7):
     # surf_pc = pc[:, 0]
     diff = pc[:, :, None] - surf_pc 
     dists = diff.norm(dim=-1)
     dists, closest_ixs = dists.min(axis=-1)
-    behind_surf = z_vals > depth_sample[:, None]
-    dists[behind_surf] *= -1
+    ceiling_dists = (ceiling - pc[:, :, 2]) 
+    floor_dists = (pc[:, :, 2] - floor)
+    dists = torch.min(dists, ceiling_dists)
+    dists = torch.min(dists, floor_dists)
+
+    behind_surf = z_vals[:depth_sample.shape[0]] > depth_sample[:, None]
+    dists[:depth_sample.shape[0]][behind_surf] *= -1
     #! set to 0 if behind surface
     # dists[behind_surf] = 0
     bounds = dists
 
-    return bounds
+    sphere_diff = sphere_points[:, None] - surf_pc
+    sphere_dists = sphere_diff.norm(dim=-1)
+    sphere_dists, _ = sphere_dists.min(axis=-1)
+    ceiling_dists = (ceiling - sphere_points[:, 2])
+    floor_dists = (sphere_points[:, 2] - floor)
+    sphere_dists = torch.min(sphere_dists, ceiling_dists)
+    sphere_dists = torch.min(sphere_dists, floor_dists)
+    # behind_surf = 
+    # sphere_dists[behind_surf] *= -1
+
+    return bounds, sphere_dists
 
 
 
 if __name__ == "__main__":
     #! test the dataset
-    root_dir = "/home/exx/Documents/FBPINNs/b1/haas_first/haas_test"
-    root_dir = "/home/exx/Documents/FBPINNs/b1/haas_first/hass_first_floor"
-    root_dir = '/home/exx/Documents/FBPINNs/b1/haas'
-    root_dir = '/home/exx/Documents/FBPINNs/b1/haas_fine'
-    config_file = "/home/exx/Documents/FBPINNs/configs/lidar.json"
+    root_dir = '/home/exx/Documents/FBPINNs/data/b1/basement'
+    config_file = "data/b1/basement/lidar.json"
     dataset = LidarDataset(root_dir, config_file)
     sample = dataset[0]
     print(sample["depth"].shape)
     print(sample["T"].shape)
     print(sample["depth_dirs"].shape)
     points, speeds, bounds = dataset.get_speeds(range(133), num=200000) #133
-    plane = [-2.5, 6, -11.5, 1.5]
-    points *= 0.25
-    viz(points.cpu().numpy(), speeds.cpu().numpy(), plane=plane)   
+    plane = np.array([-2.5, 6, -11.5, 1.5]) * 4
+    # points *= 0.25
+    viz(points.cpu().numpy(), speeds.cpu().numpy(), plane=plane, height=-0.7)   
 
 
 

@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# Generate Config File if Necessary
-echo "***Generating Config File***"
-python data_processing/gibson_config_gen.py
+# # Generate Config File if Necessary
+# echo "***Generating Config File***"
+# python data_processing/gibson_config_gen.py
 
-# Data Preprocessing (Scaling Mesh)
-echo "***Scaling Mesh***"
-python data_processing/scale_mesh.py
+# # Data Preprocessing (Scaling Mesh)
+# echo "***Scaling Mesh***"
+# python data_processing/scale_mesh.py
 
 # Data Preprocessing (Generating Training Data)
 echo "***Generating Training Data***"

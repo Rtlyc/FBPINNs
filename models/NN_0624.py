@@ -453,11 +453,11 @@ class NN(nn.Module):
         dtau = self.gradient(tau, Xp)
 
         DT0 = dtau[:,:self.dim] # dtau(s)
-        S0 = torch.einsum('ij,ij->i', DT0, DT0) # |dtau(s)|^2 = 1/(S(s)^2)
+        S0 = torch.einsum('ij,ij->i', DT0, DT0).unsqueeze(1) # |dtau(s)|^2 = 1/(S(s)^2)
         Ypred0 = 1/S0 * DT0 # S(s)^2 * dtau(s)
         
         DT1 = dtau[:,self.dim:] # dtau(g)
-        S1 = torch.einsum('ij,ij->i', DT1, DT1)
+        S1 = torch.einsum('ij,ij->i', DT1, DT1).unsqueeze(1)
         Ypred1 = 1/S1 * DT1
         
         return torch.cat((Ypred0, Ypred1),dim=1)
